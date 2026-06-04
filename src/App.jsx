@@ -251,11 +251,19 @@ function CellarView(props) {
 
   return (
     <div className="fade-in">
-      {/* 搜尋列 */}
-      <div style={{ position: "relative", marginBottom: 10 }}>
-        <span style={{ position: "absolute", left: 13, top: "50%", transform: "translateY(-50%)", color: "#5a5042", fontSize: 14 }}>🔍</span>
-        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="搜尋 酒名 · 酒造 · 産地 · 酒米 · 銘柄"
-          style={{ width: "100%", background: "rgba(255,255,255,0.05)", border: "1px solid var(--line)", borderRadius: 12, padding: "11px 14px 11px 38px", color: "var(--ink)", fontSize: 13, outline: "none" }} />
+      {/* 搜尋列 + 選取按鈕 */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+        <div style={{ position: "relative", flex: 1 }}>
+          <span style={{ position: "absolute", left: 13, top: "50%", transform: "translateY(-50%)", color: "#5a5042", fontSize: 14 }}>🔍</span>
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="搜尋 酒名 · 酒造 · 産地 · 酒米"
+            style={{ width: "100%", background: "rgba(255,255,255,0.05)", border: "1px solid var(--line)", borderRadius: 12, padding: "11px 14px 11px 38px", color: "var(--ink)", fontSize: 13, outline: "none" }} />
+        </div>
+        <button
+          onClick={() => { if (selectMode) { clearSelect(); } else { setSelectMode(true); } }}
+          style={{ whiteSpace: "nowrap", background: selectMode ? gold : "rgba(255,255,255,0.05)", border: selectMode ? "none" : "1px solid var(--line)", color: selectMode ? "#0e0a06" : "#bba080", borderRadius: 12, padding: "0 16px", fontSize: 13, fontWeight: 600 }}
+        >
+          {selectMode ? "完成" : "選取"}
+        </button>
       </div>
 
       {/* 有辨識失敗時，顯示快速選取按鈕 */}
