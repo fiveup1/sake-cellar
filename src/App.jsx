@@ -120,7 +120,6 @@ export default function App() {
             {!hasSupabase && (
               <span style={{ fontSize: 9, color: "#8a6a3a", background: "rgba(201,146,42,0.1)", padding: "3px 7px", borderRadius: 6, border: "1px solid rgba(201,146,42,0.2)" }}>本機模式</span>
             )}
-            <div className="mincho" style={{ width: 46, height: 46, background: "rgba(201,146,42,0.1)", border: "1px solid rgba(201,146,42,0.25)", borderRadius: 12, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22, color: gold }}>盃</div>
           </div>
         </div>
       </header>
@@ -487,20 +486,20 @@ function DetailSheet({ sake, onClose, onDelete }) {
 
   return (
     <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.8)", zIndex: 100, display: "flex", alignItems: "flex-end", justifyContent: "center" }}>
-      <div onClick={e => e.stopPropagation()} style={{ background: "#15100a", borderRadius: "22px 22px 0 0", maxWidth: 460, width: "100%", maxHeight: "92dvh", overflowY: "auto", animation: "slideUp .3s cubic-bezier(0.2,0.8,0.2,1)", paddingBottom: "env(safe-area-inset-bottom)" }} className="no-scrollbar">
+      <div onClick={e => e.stopPropagation()} style={{ background: "#15100a", borderRadius: "22px 22px 0 0", maxWidth: 460, width: "100%", maxHeight: "calc(100dvh - env(safe-area-inset-top) - 12px)", overflowY: "auto", animation: "slideUp .3s cubic-bezier(0.2,0.8,0.2,1)", paddingBottom: "env(safe-area-inset-bottom)" }} className="no-scrollbar">
         {/* 頂部固定列：返回鍵 + 抓桿 */}
-        <div style={{ position: "sticky", top: 0, paddingTop: 10, paddingBottom: 8, background: "linear-gradient(180deg,#15100a 80%,transparent)", zIndex: 5 }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", position: "relative", paddingLeft: 16, paddingRight: 16 }}>
+        <div style={{ position: "sticky", top: 0, paddingTop: 14, paddingBottom: 10, background: "#15100a", zIndex: 5, borderRadius: "22px 22px 0 0" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", position: "relative", paddingLeft: 14, paddingRight: 14, minHeight: 40 }}>
             <button
               onClick={onClose}
-              style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", display: "flex", alignItems: "center", gap: 4, background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.12)", color: "var(--ink)", borderRadius: 99, padding: "7px 14px 7px 10px", fontSize: 13, fontWeight: 500 }}
+              style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", display: "flex", alignItems: "center", gap: 3, background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.12)", color: "var(--ink)", borderRadius: 99, padding: "8px 15px 8px 11px", fontSize: 13, fontWeight: 500 }}
             >
-              <span style={{ fontSize: 16, lineHeight: 1 }}>‹</span> 返回
+              <span style={{ fontSize: 17, lineHeight: 1, marginTop: -1 }}>‹</span> 返回
             </button>
             <div style={{ width: 40, height: 4, background: "#3a3025", borderRadius: 99 }} />
             <button
               onClick={onClose}
-              style={{ position: "absolute", right: 14, top: "50%", transform: "translateY(-50%)", width: 32, height: 32, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.12)", color: "#aaa", borderRadius: 99, fontSize: 15 }}
+              style={{ position: "absolute", right: 14, top: "50%", transform: "translateY(-50%)", width: 34, height: 34, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.12)", color: "#aaa", borderRadius: 99, fontSize: 14 }}
             >
               ✕
             </button>
@@ -548,6 +547,18 @@ function DetailSheet({ sake, onClose, onDelete }) {
             <div style={{ background: "rgba(201,146,42,0.07)", border: "1px solid rgba(201,146,42,0.15)", borderRadius: 12, padding: "13px 15px", marginBottom: 16 }}>
               <div style={{ fontSize: 10, color: gold, letterSpacing: 1.5, marginBottom: 5 }}>味わい / TASTING</div>
               <div style={{ fontSize: 13, color: "#d0c0a0", lineHeight: 1.7 }}>{i.flavors}</div>
+            </div>
+          )}
+
+          {/* 參考價格 */}
+          {i.price && i.price !== "null" && (
+            <div style={{ display: "flex", alignItems: "center", gap: 12, background: "rgba(201,146,42,0.1)", border: "1px solid rgba(201,146,42,0.2)", borderRadius: 12, padding: "13px 16px", marginBottom: 16 }}>
+              <span style={{ fontSize: 22 }}>💰</span>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 10, color: gold, letterSpacing: 1, marginBottom: 2 }}>台灣參考售價</div>
+                <div className="mincho" style={{ fontSize: 17, color: "var(--ink)", fontWeight: 700 }}>{i.price}</div>
+              </div>
+              <span style={{ fontSize: 9, color: "#665a44", textAlign: "right", lineHeight: 1.4, maxWidth: 70 }}>AI 估算<br/>僅供參考</span>
             </div>
           )}
 
