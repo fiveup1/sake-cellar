@@ -27,6 +27,7 @@ export default function App() {
   const [detail, setDetail] = useState(null);
   const [importing, setImporting] = useState(false);
   const [progress, setProgress] = useState({ done: 0, total: 0 });
+  const abortImportRef = useRef(false);
   const fileRef = useRef();
 
   // 載入資料
@@ -56,6 +57,7 @@ export default function App() {
   const handleImport = useCallback(async (files) => {
     const arr = Array.from(files).filter(f => f.type.startsWith("image/"));
     if (!arr.length) return;
+    abortImportRef.current = false; // 重置中斷旗標
     setImporting(true);
     setTab("cellar");
     setProgress({ done: 0, total: arr.length });
@@ -82,6 +84,13 @@ export default function App() {
         const aiPromise = analyzeImage(base64, "image/jpeg");
 
         const [location, result] = await Promise.all([geoPromise, aiPromise]);
+
+        // 若辨識回來時已被中斷，移除這張佔位卡、不儲存
+        if (abortImportRef.current) {
+          setSakes(prev => prev.filter(s => s.id !== id));
+          return;
+        }
+
         const info = result.info;
         const enrichedInfo = info ? { ...info, photo_date: photoDate, location } : info;
         const finished = { ...placeholder, location, info: enrichedInfo, status: info ? "done" : "error", errorMsg: result.error || null, rawDebug: result.raw || null };
@@ -105,13 +114,22 @@ export default function App() {
     let cursor = 0;
     const worker = async () => {
       while (cursor < arr.length) {
+        if (abortImportRef.current) break; // 中斷：不再開始新的辨識
         const myIndex = cursor++;
         await processOne(arr[myIndex]);
       }
     };
     await Promise.all(Array.from({ length: Math.min(CONCURRENCY, arr.length) }, worker));
 
+    abortImportRef.current = false;
     setImporting(false);
+  }, []);
+
+  // 中斷批量匯入
+  const cancelImport = useCallback(() => {
+    abortImportRef.current = true;
+    // 立刻清掉所有還在「辨識中」的佔位卡
+    setSakes(prev => prev.filter(s => s.status !== "analyzing"));
   }, []);
 
   // ── 選取 ──
@@ -163,11 +181,11 @@ export default function App() {
                 selected={selected} selectMode={selectMode} setSelectMode={setSelectMode}
                 toggleSelect={toggleSelect} selectAll={selectAll} clearSelect={clearSelect}
                 onOpen={setDetail} onGoImport={() => setTab("import")} onGoCollage={() => setTab("collage")}
-                importing={importing} progress={progress}
+                importing={importing} progress={progress} cancelImport={cancelImport}
               />
             )}
             {tab === "import" && (
-              <ImportView fileRef={fileRef} onImport={handleImport} importing={importing} progress={progress} />
+              <ImportView fileRef={fileRef} onImport={handleImport} importing={importing} progress={progress} cancelImport={cancelImport} />
             )}
             {tab === "collage" && (
               <CollageView sakes={sakes} selected={selected} setSelected={setSelected} setSelectMode={setSelectMode} goCellar={() => setTab("cellar")} />
@@ -203,7 +221,7 @@ export default function App() {
 // ═══════════════════════════ 酒窖 ═══════════════════════════
 function CellarView(props) {
   const { sakes, filtered, cats, search, setSearch, filterCat, setFilterCat, sortBy, setSortBy,
-    selected, selectMode, setSelectMode, toggleSelect, selectAll, clearSelect, onOpen, onGoImport, onGoCollage, importing, progress } = props;
+    selected, selectMode, setSelectMode, toggleSelect, selectAll, clearSelect, onOpen, onGoImport, onGoCollage, importing, progress, cancelImport } = props;
   const gold = "#c9922a";
   const [showSort, setShowSort] = useState(false);
   const sortLabels = { new: "最新加入", name: "酒名", brewery: "酒造" };
@@ -249,9 +267,12 @@ function CellarView(props) {
       {/* 匯入進度 */}
       {importing && (
         <div style={{ background: "rgba(201,146,42,0.08)", border: "1px solid rgba(201,146,42,0.2)", borderRadius: 12, padding: 13, marginBottom: 12 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 7, fontSize: 12 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 7, fontSize: 12 }}>
             <span style={{ color: gold }}>AI 辨識中…</span>
-            <span style={{ color: "#888" }}>{progress.done}/{progress.total}</span>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span style={{ color: "#888" }}>{progress.done}/{progress.total}</span>
+              <button onClick={cancelImport} style={{ background: "rgba(183,58,50,0.18)", border: "1px solid rgba(183,58,50,0.4)", color: "#e07a72", borderRadius: 8, padding: "4px 12px", fontSize: 12, fontWeight: 600 }}>中斷</button>
+            </div>
           </div>
           <div style={{ background: "rgba(255,255,255,0.08)", borderRadius: 99, height: 5 }}>
             <div style={{ height: "100%", background: `linear-gradient(90deg,${gold},#e8b84b)`, borderRadius: 99, width: `${(progress.done / progress.total) * 100}%`, transition: "width .3s" }} />
@@ -356,7 +377,7 @@ function SakeCard({ sake, selected, selectMode, onSelect, onOpen, onLongPress })
 const gold = "#c9922a";
 
 // ═══════════════════════════ 匯入 ═══════════════════════════
-function ImportView({ fileRef, onImport, importing, progress }) {
+function ImportView({ fileRef, onImport, importing, progress, cancelImport }) {
   return (
     <div className="fade-in">
       <div style={{ marginBottom: 22 }}>
@@ -373,9 +394,12 @@ function ImportView({ fileRef, onImport, importing, progress }) {
 
       {importing && (
         <div style={{ marginTop: 20, background: "rgba(201,146,42,0.08)", border: "1px solid rgba(201,146,42,0.2)", borderRadius: 12, padding: 16 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8, fontSize: 13 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, fontSize: 13 }}>
             <span style={{ color: gold }}>AI 辨識中…</span>
-            <span style={{ color: "#888" }}>{progress.done}/{progress.total}</span>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span style={{ color: "#888" }}>{progress.done}/{progress.total}</span>
+              <button onClick={cancelImport} style={{ background: "rgba(183,58,50,0.18)", border: "1px solid rgba(183,58,50,0.4)", color: "#e07a72", borderRadius: 8, padding: "5px 13px", fontSize: 12, fontWeight: 600 }}>中斷</button>
+            </div>
           </div>
           <div style={{ background: "rgba(255,255,255,0.08)", borderRadius: 99, height: 6 }}>
             <div style={{ height: "100%", background: `linear-gradient(90deg,${gold},#e8b84b)`, borderRadius: 99, width: `${(progress.done / progress.total) * 100}%`, transition: "width .3s" }} />
