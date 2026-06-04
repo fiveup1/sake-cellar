@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { fetchSakes, insertSake, updateSake, deleteSake, hasSupabase } from "./lib/db";
 import { analyzeImage, compressImage } from "./lib/analyze";
+import { extractExif, reverseGeocode } from "./lib/exif";
 import { buildTidyCollage, buildScatteredCollage, downloadDataUrl } from "./lib/collage";
 import TasteMap from "./components/TasteMap";
 import TempScale from "./components/TempScale";
@@ -62,13 +63,23 @@ export default function App() {
     for (let i = 0; i < arr.length; i++) {
       const id = uid();
       try {
+        // 先讀原始檔的 EXIF（拍攝日期 + GPS），務必在壓縮前讀，壓縮會清掉 EXIF
+        const exif = await extractExif(arr[i]);
+        let photoDate = exif.date || null;
+        let location = null;
+        if (exif.lat != null && exif.lng != null) {
+          location = await reverseGeocode(exif.lat, exif.lng);
+        }
+
         const { blob, dataUrl, base64 } = await compressImage(arr[i]);
         // 先放佔位卡
-        const placeholder = { id, imageUrl: dataUrl, imageBlob: blob, info: null, status: "analyzing", addedAt: new Date().toISOString() };
+        const placeholder = { id, imageUrl: dataUrl, imageBlob: blob, info: null, status: "analyzing", addedAt: new Date().toISOString(), photoDate, location };
         setSakes(prev => [placeholder, ...prev]);
 
         const info = await analyzeImage(base64, "image/jpeg");
-        const finished = { ...placeholder, info, status: info ? "done" : "error" };
+        // 把拍攝日期與地點併入 info，方便顯示與儲存
+        const enrichedInfo = info ? { ...info, photo_date: photoDate, location } : info;
+        const finished = { ...placeholder, info: enrichedInfo, status: info ? "done" : "error" };
 
         // 存到 DB（Supabase 會上傳圖片並回傳公開 URL）
         const saved = await insertSake(finished);
@@ -313,6 +324,9 @@ function SakeCard({ sake, selected, selectMode, onSelect, onOpen, onLongPress })
         </div>
         <div style={{ fontSize: 10.5, color: "#8a7a5a", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{i.brewery || ""}</div>
         <div style={{ fontSize: 10, color: "#665a44" }}>{i.region || ""}{i.seimai ? ` · 精米${i.seimai}` : ""}</div>
+        {(sake.photoDate || i.photo_date) && (
+          <div style={{ fontSize: 9.5, color: "#554a38", marginTop: 2 }}>📅 {sake.photoDate || i.photo_date}</div>
+        )}
       </div>
     </div>
   );
@@ -460,13 +474,13 @@ function DetailSheet({ sake, onClose, onDelete }) {
   const color = catColor(i.category);
 
   const sakeRows = [
-    ["精米歩合", i.seimai], ["使用酒米", i.rice], ["使用酵母", i.yeast],
-    ["アルコール度", i.alcohol], ["甘辛", i.sweetness],
+    ["精米步合", i.seimai], ["使用酒米", i.rice], ["使用酵母", i.yeast],
+    ["酒精濃度", i.alcohol], ["甘辛度", i.sweetness],
   ].filter(([, v]) => v);
 
   const wineRows = [
     ["品種", i.grapes], ["年份", i.vintage], ["甜度", i.sweetness],
-    ["アルコール度", i.alcohol],
+    ["酒精濃度", i.alcohol],
   ].filter(([, v]) => v);
 
   const rows = isSake ? sakeRows : wineRows;
@@ -474,9 +488,23 @@ function DetailSheet({ sake, onClose, onDelete }) {
   return (
     <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.8)", zIndex: 100, display: "flex", alignItems: "flex-end", justifyContent: "center" }}>
       <div onClick={e => e.stopPropagation()} style={{ background: "#15100a", borderRadius: "22px 22px 0 0", maxWidth: 460, width: "100%", maxHeight: "92dvh", overflowY: "auto", animation: "slideUp .3s cubic-bezier(0.2,0.8,0.2,1)", paddingBottom: "env(safe-area-inset-bottom)" }} className="no-scrollbar">
-        {/* 抓桿 */}
-        <div style={{ position: "sticky", top: 0, paddingTop: 10, paddingBottom: 4, background: "linear-gradient(180deg,#15100a 70%,transparent)", display: "flex", justifyContent: "center", zIndex: 5 }}>
-          <div style={{ width: 40, height: 4, background: "#3a3025", borderRadius: 99 }} />
+        {/* 頂部固定列：返回鍵 + 抓桿 */}
+        <div style={{ position: "sticky", top: 0, paddingTop: 10, paddingBottom: 8, background: "linear-gradient(180deg,#15100a 80%,transparent)", zIndex: 5 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", position: "relative", paddingLeft: 16, paddingRight: 16 }}>
+            <button
+              onClick={onClose}
+              style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", display: "flex", alignItems: "center", gap: 4, background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.12)", color: "var(--ink)", borderRadius: 99, padding: "7px 14px 7px 10px", fontSize: 13, fontWeight: 500 }}
+            >
+              <span style={{ fontSize: 16, lineHeight: 1 }}>‹</span> 返回
+            </button>
+            <div style={{ width: 40, height: 4, background: "#3a3025", borderRadius: 99 }} />
+            <button
+              onClick={onClose}
+              style={{ position: "absolute", right: 14, top: "50%", transform: "translateY(-50%)", width: 32, height: 32, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.12)", color: "#aaa", borderRadius: 99, fontSize: 15 }}
+            >
+              ✕
+            </button>
+          </div>
         </div>
 
         {sake.imageUrl && (
@@ -497,7 +525,23 @@ function DetailSheet({ sake, onClose, onDelete }) {
 
           <div className="mincho" style={{ fontSize: 21, color: "var(--ink)", fontWeight: 700, lineHeight: 1.35, marginBottom: 3 }}>{i.name || "未知酒款"}</div>
           {i.name_kana && <div style={{ fontSize: 12, color: "#7a6a4a", marginBottom: 6 }}>{i.name_kana}</div>}
-          <div style={{ fontSize: 13, color: gold, marginBottom: 18 }}>{[i.brewery, i.region].filter(Boolean).join(" · ")}</div>
+          <div style={{ fontSize: 13, color: gold, marginBottom: 12 }}>{[i.brewery, i.region].filter(Boolean).join(" · ")}</div>
+
+          {/* 拍攝日期 + 地點 */}
+          {(sake.photoDate || sake.location || i.photo_date || i.location) && (
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
+              {(sake.photoDate || i.photo_date) && (
+                <span style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, background: "rgba(255,255,255,0.05)", color: "#bba080", padding: "5px 11px", borderRadius: 99 }}>
+                  📅 {sake.photoDate || i.photo_date}
+                </span>
+              )}
+              {(sake.location || i.location) && (
+                <span style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, background: "rgba(255,255,255,0.05)", color: "#bba080", padding: "5px 11px", borderRadius: 99 }}>
+                  📍 {sake.location || i.location}
+                </span>
+              )}
+            </div>
+          )}
 
           {/* 風味 */}
           {i.flavors && (

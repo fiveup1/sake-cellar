@@ -1,14 +1,14 @@
-// 溫度帶顯示 — 雪冷え → 熱燗
+// 溫度帶顯示 — 雪冷 → 熱燗
 
 const BANDS = [
-  { key: "雪冷え", temp: 5, color: "#4a90d9", label: "雪冷え" },
-  { key: "花冷え", temp: 10, color: "#5fa8d3", label: "花冷え" },
-  { key: "涼冷え", temp: 15, color: "#7bb8c4", label: "涼冷え" },
-  { key: "冷や", temp: 20, color: "#9c9c7a", label: "冷や/常温" },
-  { key: "日向燗", temp: 30, color: "#d4a843", label: "日向燗" },
-  { key: "人肌燗", temp: 35, color: "#d4923a", label: "人肌燗" },
-  { key: "ぬる燗", temp: 40, color: "#c97a2a", label: "ぬる燗" },
-  { key: "上燗", temp: 45, color: "#c25e22", label: "上燗" },
+  { key: "雪冷", temp: 5, color: "#4a90d9", label: "雪冷" },
+  { key: "花冷", temp: 10, color: "#5fa8d3", label: "花冷" },
+  { key: "涼冷", temp: 15, color: "#7bb8c4", label: "涼冷" },
+  { key: "常溫", temp: 20, color: "#9c9c7a", label: "常溫" },
+  { key: "日向溫", temp: 30, color: "#d4a843", label: "日向溫" },
+  { key: "人肌溫", temp: 35, color: "#d4923a", label: "人肌溫" },
+  { key: "微溫", temp: 40, color: "#c97a2a", label: "微溫" },
+  { key: "上溫", temp: 45, color: "#c25e22", label: "上溫" },
   { key: "熱燗", temp: 50, color: "#b73a32", label: "熱燗" },
 ];
 

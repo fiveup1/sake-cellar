@@ -35,14 +35,20 @@ export async function insertSake(sake) {
       const { error: upErr } = await supabase.storage
         .from("sake-images")
         .upload(path, sake.imageBlob, { contentType: "image/jpeg", upsert: true });
-      if (!upErr) {
+      if (upErr) {
+        console.error("圖片上傳失敗:", upErr.message);
+      } else {
         const { data } = supabase.storage.from("sake-images").getPublicUrl(path);
         imageUrl = data.publicUrl;
       }
     }
     const row = sakeToRow({ ...sake, imageUrl });
     const { error } = await supabase.from("sakes").insert(row);
-    if (error) console.error(error);
+    if (error) {
+      // 寫入資料庫失敗 → 拋出，讓上層知道（會顯示在卡片上）
+      console.error("資料庫寫入失敗:", error.message);
+      throw new Error("DB insert failed: " + error.message);
+    }
     return { ...sake, imageUrl };
   }
   // localStorage 模式
