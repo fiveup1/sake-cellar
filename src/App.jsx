@@ -76,16 +76,22 @@ export default function App() {
         const placeholder = { id, imageUrl: dataUrl, imageBlob: blob, info: null, status: "analyzing", addedAt: new Date().toISOString(), photoDate, location };
         setSakes(prev => [placeholder, ...prev]);
 
-        const info = await analyzeImage(base64, "image/jpeg");
+        const result = await analyzeImage(base64, "image/jpeg");
+        const info = result.info;
         // 把拍攝日期與地點併入 info，方便顯示與儲存
         const enrichedInfo = info ? { ...info, photo_date: photoDate, location } : info;
-        const finished = { ...placeholder, info: enrichedInfo, status: info ? "done" : "error" };
+        const finished = { ...placeholder, info: enrichedInfo, status: info ? "done" : "error", errorMsg: result.error || null, rawDebug: result.raw || null };
 
-        // 存到 DB（Supabase 會上傳圖片並回傳公開 URL）
-        const saved = await insertSake(finished);
-        setSakes(prev => prev.map(s => s.id === id ? { ...finished, imageUrl: saved.imageUrl || dataUrl, imageBlob: undefined } : s));
+        // 存到 DB（Supabase 會上傳圖片並回傳公開 URL）。辨識失敗也存圖，保留紀錄
+        try {
+          const saved = await insertSake(finished);
+          setSakes(prev => prev.map(s => s.id === id ? { ...finished, imageUrl: saved.imageUrl || dataUrl, imageBlob: undefined } : s));
+        } catch (dbErr) {
+          // 資料庫寫入失敗，把錯誤顯示在卡片上
+          setSakes(prev => prev.map(s => s.id === id ? { ...finished, status: "error", errorMsg: "儲存失敗：" + dbErr.message, imageBlob: undefined } : s));
+        }
       } catch (e) {
-        setSakes(prev => prev.map(s => s.id === id ? { ...s, status: "error" } : s));
+        setSakes(prev => prev.map(s => s.id === id ? { ...s, status: "error", errorMsg: e.message } : s));
       }
       setProgress({ done: i + 1, total: arr.length });
     }
@@ -525,6 +531,19 @@ function DetailSheet({ sake, onClose, onDelete }) {
           <div className="mincho" style={{ fontSize: 21, color: "var(--ink)", fontWeight: 700, lineHeight: 1.35, marginBottom: 3 }}>{i.name || "未知酒款"}</div>
           {i.name_kana && <div style={{ fontSize: 12, color: "#7a6a4a", marginBottom: 6 }}>{i.name_kana}</div>}
           <div style={{ fontSize: 13, color: gold, marginBottom: 12 }}>{[i.brewery, i.region].filter(Boolean).join(" · ")}</div>
+
+          {/* 辨識失敗診斷訊息 */}
+          {sake.status === "error" && (sake.errorMsg || sake.rawDebug) && (
+            <div style={{ background: "rgba(183,58,50,0.1)", border: "1px solid rgba(183,58,50,0.3)", borderRadius: 12, padding: "13px 15px", marginBottom: 16 }}>
+              <div style={{ fontSize: 11, color: "#d96a62", marginBottom: 6, fontWeight: 600 }}>⚠️ 辨識失敗原因</div>
+              {sake.errorMsg && <div style={{ fontSize: 12, color: "#d0c0a0", lineHeight: 1.6, marginBottom: sake.rawDebug ? 8 : 0 }}>{sake.errorMsg}</div>}
+              {sake.rawDebug && (
+                <div style={{ fontSize: 11, color: "#998", lineHeight: 1.5, background: "rgba(0,0,0,0.25)", borderRadius: 8, padding: "8px 10px", wordBreak: "break-all", maxHeight: 120, overflowY: "auto" }}>
+                  AI 回應：{sake.rawDebug}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* 拍攝日期 + 地點 */}
           {(sake.photoDate || sake.location || i.photo_date || i.location) && (

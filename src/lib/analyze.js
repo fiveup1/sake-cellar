@@ -1,4 +1,5 @@
 // 呼叫後端 serverless function 進行 AI 辨識
+// 回傳 { info, error, raw } 方便在畫面上顯示失敗原因
 
 export async function analyzeImage(base64, mimeType = "image/jpeg") {
   try {
@@ -8,11 +9,18 @@ export async function analyzeImage(base64, mimeType = "image/jpeg") {
       body: JSON.stringify({ image: base64, mimeType }),
     });
     const data = await res.json();
-    if (data.error) { console.error("analyze error:", data.error); return null; }
-    return data.info;
+    if (data.error) {
+      console.error("analyze error:", data.error);
+      return { info: null, error: data.error };
+    }
+    if (!data.info) {
+      // 後端有回應但解析不出 JSON，附上 raw 方便診斷
+      return { info: null, error: "AI 回應無法解析", raw: data.raw };
+    }
+    return { info: data.info };
   } catch (e) {
     console.error("analyze failed:", e);
-    return null;
+    return { info: null, error: "連線失敗：" + e.message };
   }
 }
 
