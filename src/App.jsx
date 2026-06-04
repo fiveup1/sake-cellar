@@ -100,7 +100,8 @@ export default function App() {
     };
 
     // 🚀 並行處理：同時跑 CONCURRENCY 張，跑完一張就補下一張
-    const CONCURRENCY = 4;
+    // 設為 2 以避免觸發 API 速率限制（搭配 analyzeImage 內建的自動重試）
+    const CONCURRENCY = 2;
     let cursor = 0;
     const worker = async () => {
       while (cursor < arr.length) {
