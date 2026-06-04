@@ -144,6 +144,27 @@ export default function App() {
     setSelected(s => { const n = new Set(s); n.delete(id); return n; });
   };
 
+  // 批量刪除已選的酒
+  const handleBatchDelete = useCallback(async () => {
+    const ids = Array.from(selected);
+    if (ids.length === 0) return;
+    if (!confirm(`確定刪除已選的 ${ids.length} 筆記錄？此動作無法復原。`)) return;
+    // 先從畫面移除（即時反應），再背景刪除資料庫
+    setSakes(prev => prev.filter(s => !selected.has(s.id)));
+    setSelected(new Set());
+    setSelectMode(false);
+    for (const id of ids) {
+      try { await deleteSake(id); } catch (e) { console.error("刪除失敗", id, e); }
+    }
+  }, [selected]);
+
+  // 快速選取所有「辨識失敗」的酒
+  const selectFailed = useCallback(() => {
+    const failedIds = filtered.filter(s => s.status === "error").map(s => s.id);
+    setSelected(new Set(failedIds));
+    if (failedIds.length > 0) setSelectMode(true);
+  }, [filtered]);
+
   const gold = "#c9922a";
 
   return (
@@ -180,6 +201,7 @@ export default function App() {
                 sortBy={sortBy} setSortBy={setSortBy}
                 selected={selected} selectMode={selectMode} setSelectMode={setSelectMode}
                 toggleSelect={toggleSelect} selectAll={selectAll} clearSelect={clearSelect}
+                handleBatchDelete={handleBatchDelete} selectFailed={selectFailed}
                 onOpen={setDetail} onGoImport={() => setTab("import")} onGoCollage={() => setTab("collage")}
                 importing={importing} progress={progress} cancelImport={cancelImport}
               />
@@ -221,10 +243,11 @@ export default function App() {
 // ═══════════════════════════ 酒窖 ═══════════════════════════
 function CellarView(props) {
   const { sakes, filtered, cats, search, setSearch, filterCat, setFilterCat, sortBy, setSortBy,
-    selected, selectMode, setSelectMode, toggleSelect, selectAll, clearSelect, onOpen, onGoImport, onGoCollage, importing, progress, cancelImport } = props;
+    selected, selectMode, setSelectMode, toggleSelect, selectAll, clearSelect, handleBatchDelete, selectFailed, onOpen, onGoImport, onGoCollage, importing, progress, cancelImport } = props;
   const gold = "#c9922a";
   const [showSort, setShowSort] = useState(false);
   const sortLabels = { new: "最新加入", name: "酒名", brewery: "酒造" };
+  const failedCount = filtered.filter(s => s.status === "error").length;
 
   return (
     <div className="fade-in">
@@ -234,6 +257,14 @@ function CellarView(props) {
         <input value={search} onChange={e => setSearch(e.target.value)} placeholder="搜尋 酒名 · 酒造 · 産地 · 酒米 · 銘柄"
           style={{ width: "100%", background: "rgba(255,255,255,0.05)", border: "1px solid var(--line)", borderRadius: 12, padding: "11px 14px 11px 38px", color: "var(--ink)", fontSize: 13, outline: "none" }} />
       </div>
+
+      {/* 有辨識失敗時，顯示快速選取按鈕 */}
+      {failedCount > 0 && selected.size === 0 && !selectMode && (
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: "rgba(183,58,50,0.1)", border: "1px solid rgba(183,58,50,0.25)", borderRadius: 12, padding: "9px 13px", marginBottom: 12 }}>
+          <span style={{ fontSize: 12, color: "#d99" }}>有 {failedCount} 筆辨識失敗</span>
+          <button onClick={selectFailed} style={{ background: "rgba(183,58,50,0.2)", border: "1px solid rgba(183,58,50,0.4)", color: "#e07a72", borderRadius: 8, padding: "5px 13px", fontSize: 12, fontWeight: 600 }}>一鍵選取失敗項</button>
+        </div>
+      )}
 
       {/* 分類 + 排序 */}
       <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 12 }}>
@@ -282,13 +313,20 @@ function CellarView(props) {
 
       {/* 選取工具列 */}
       {(selectMode || selected.size > 0) && (
-        <div style={{ background: "rgba(201,146,42,0.12)", border: "1px solid rgba(201,146,42,0.25)", borderRadius: 12, padding: "9px 13px", marginBottom: 12, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <span style={{ fontSize: 13, color: gold }}>已選 {selected.size}</span>
-          <div style={{ display: "flex", gap: 12 }}>
-            <button onClick={selectAll} style={{ background: "none", border: "none", color: "#aaa", fontSize: 12 }}>全選</button>
-            <button onClick={clearSelect} style={{ background: "none", border: "none", color: "#aaa", fontSize: 12 }}>取消</button>
-            {selected.size > 0 && <button onClick={onGoCollage} style={{ background: gold, border: "none", color: "#0e0a06", borderRadius: 8, padding: "4px 13px", fontSize: 12, fontWeight: 600 }}>製作拼接</button>}
+        <div style={{ background: "rgba(201,146,42,0.12)", border: "1px solid rgba(201,146,42,0.25)", borderRadius: 12, padding: "10px 13px", marginBottom: 12 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: selected.size > 0 ? 10 : 0 }}>
+            <span style={{ fontSize: 13, color: gold }}>已選 {selected.size} 筆</span>
+            <div style={{ display: "flex", gap: 14 }}>
+              <button onClick={selectAll} style={{ background: "none", border: "none", color: "#aaa", fontSize: 12 }}>全選</button>
+              <button onClick={clearSelect} style={{ background: "none", border: "none", color: "#aaa", fontSize: 12 }}>取消</button>
+            </div>
           </div>
+          {selected.size > 0 && (
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={handleBatchDelete} style={{ flex: 1, background: "rgba(183,58,50,0.18)", border: "1px solid rgba(183,58,50,0.4)", color: "#e07a72", borderRadius: 9, padding: "9px", fontSize: 13, fontWeight: 600 }}>🗑️ 刪除 {selected.size} 筆</button>
+              <button onClick={onGoCollage} style={{ flex: 1, background: gold, border: "none", color: "#0e0a06", borderRadius: 9, padding: "9px", fontSize: 13, fontWeight: 600 }}>🖼️ 製作拼接</button>
+            </div>
+          )}
         </div>
       )}
 
