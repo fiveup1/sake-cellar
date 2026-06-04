@@ -60,41 +60,56 @@ export default function App() {
     setTab("cellar");
     setProgress({ done: 0, total: arr.length });
 
-    for (let i = 0; i < arr.length; i++) {
+    let done = 0;
+
+    // 處理單一張照片
+    const processOne = async (file) => {
       const id = uid();
       try {
-        // 先讀原始檔的 EXIF（拍攝日期 + GPS），務必在壓縮前讀，壓縮會清掉 EXIF
-        const exif = await extractExif(arr[i]);
-        let photoDate = exif.date || null;
-        let location = null;
-        if (exif.lat != null && exif.lng != null) {
-          location = await reverseGeocode(exif.lat, exif.lng);
-        }
+        // EXIF 要在壓縮前讀（壓縮會清掉 EXIF）
+        const exif = await extractExif(file);
+        const photoDate = exif.date || null;
 
-        const { blob, dataUrl, base64 } = await compressImage(arr[i]);
-        // 先放佔位卡
-        const placeholder = { id, imageUrl: dataUrl, imageBlob: blob, info: null, status: "analyzing", addedAt: new Date().toISOString(), photoDate, location };
+        const { blob, dataUrl, base64 } = await compressImage(file);
+        // 先放佔位卡（地點稍後補上，不阻塞辨識）
+        const placeholder = { id, imageUrl: dataUrl, imageBlob: blob, info: null, status: "analyzing", addedAt: new Date().toISOString(), photoDate, location: null };
         setSakes(prev => [placeholder, ...prev]);
 
-        const result = await analyzeImage(base64, "image/jpeg");
-        const info = result.info;
-        // 把拍攝日期與地點併入 info，方便顯示與儲存
-        const enrichedInfo = info ? { ...info, photo_date: photoDate, location } : info;
-        const finished = { ...placeholder, info: enrichedInfo, status: info ? "done" : "error", errorMsg: result.error || null, rawDebug: result.raw || null };
+        // 🚀 地理編碼與 AI 辨識「同時」進行，不互相等待
+        const geoPromise = (exif.lat != null && exif.lng != null)
+          ? reverseGeocode(exif.lat, exif.lng).catch(() => null)
+          : Promise.resolve(null);
+        const aiPromise = analyzeImage(base64, "image/jpeg");
 
-        // 存到 DB（Supabase 會上傳圖片並回傳公開 URL）。辨識失敗也存圖，保留紀錄
+        const [location, result] = await Promise.all([geoPromise, aiPromise]);
+        const info = result.info;
+        const enrichedInfo = info ? { ...info, photo_date: photoDate, location } : info;
+        const finished = { ...placeholder, location, info: enrichedInfo, status: info ? "done" : "error", errorMsg: result.error || null, rawDebug: result.raw || null };
+
         try {
           const saved = await insertSake(finished);
           setSakes(prev => prev.map(s => s.id === id ? { ...finished, imageUrl: saved.imageUrl || dataUrl, imageBlob: undefined } : s));
         } catch (dbErr) {
-          // 資料庫寫入失敗，把錯誤顯示在卡片上
           setSakes(prev => prev.map(s => s.id === id ? { ...finished, status: "error", errorMsg: "儲存失敗：" + dbErr.message, imageBlob: undefined } : s));
         }
       } catch (e) {
         setSakes(prev => prev.map(s => s.id === id ? { ...s, status: "error", errorMsg: e.message } : s));
       }
-      setProgress({ done: i + 1, total: arr.length });
-    }
+      done += 1;
+      setProgress({ done, total: arr.length });
+    };
+
+    // 🚀 並行處理：同時跑 CONCURRENCY 張，跑完一張就補下一張
+    const CONCURRENCY = 4;
+    let cursor = 0;
+    const worker = async () => {
+      while (cursor < arr.length) {
+        const myIndex = cursor++;
+        await processOne(arr[myIndex]);
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, arr.length) }, worker));
+
     setImporting(false);
   }, []);
 
