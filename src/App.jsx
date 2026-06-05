@@ -746,100 +746,53 @@ function CollageView({ sakes, selected, setSelected, setSelectMode, goCellar }) 
 // ═══════════════════════════ 載入動畫 ═══════════════════════════
 function StickmanLoading() {
   return (
-    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", minHeight: "60vh", gap: 24 }}>
-      <svg width="220" height="180" viewBox="0 0 220 180" style={{ overflow: "visible" }}>
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", minHeight: "60vh", gap: 30 }}>
+      <svg width="300" height="260" viewBox="0 0 300 260" style={{ overflow: "visible" }}>
         <style>{`
-          /* 酒瓶傾倒倒酒：傾斜→倒→回正，循環 */
-          @keyframes pour {
-            0%, 22%   { transform: rotate(0deg); }
-            42%, 70%  { transform: rotate(58deg); }
-            90%, 100% { transform: rotate(0deg); }
+          /* 瓶子直立畫，繞瓶口(150,70)旋轉：微斜 → 打橫倒向左邊杯子，5 秒完成 */
+          @keyframes tilt {
+            0%        { transform: rotate(-12deg); }
+            80%, 100% { transform: rotate(-105deg); }
           }
-          /* 酒液流：倒的時候出現 */
+          /* 酒流：傾斜到一定角度後出現 */
           @keyframes streamShow {
-            0%, 30%   { opacity: 0; }
-            45%, 68%  { opacity: 1; }
-            80%, 100% { opacity: 0; }
+            0%, 24%   { opacity: 0; }
+            40%, 100% { opacity: 1; }
           }
-          /* 杯中酒位上升（用 scaleY，從底部長上來） */
-          @keyframes fillUp {
-            0%, 38%   { transform: scaleY(0); }
-            70%, 100% { transform: scaleY(1); }
+          /* 杯中酒位：5 秒內由空到滿 */
+          @keyframes cupFill {
+            0%, 20%   { transform: scaleY(0); }
+            92%, 100% { transform: scaleY(1); }
           }
-          /* 開瓶手：先靠近拔瓶蓋再離開 */
-          @keyframes openCap {
-            0%        { transform: translate(0,0); opacity: 1; }
-            14%       { transform: translate(0,-2px); opacity: 1; }
-            22%       { transform: translate(18px,-26px) rotate(20deg); opacity: 1; }
-            30%, 100% { transform: translate(40px,-50px) rotate(40deg); opacity: 0; }
-          }
-          /* 瓶蓋飛走 */
-          @keyframes capFly {
-            0%, 14%   { transform: translate(0,0); opacity: 0; }
-            22%       { opacity: 1; }
-            40%, 100% { transform: translate(34px,-44px) rotate(180deg); opacity: 0; }
-          }
-          .bottle-grp { transform-origin: 150px 120px; animation: pour 4s ease-in-out infinite; }
-          .stream { animation: streamShow 4s ease-in-out infinite; transform-origin: top; }
-          .fill { animation: fillUp 4s ease-in-out infinite; }
-          .open-hand { animation: openCap 4s ease-in-out infinite; }
-          .cap { animation: capFly 4s ease-in-out infinite; }
+          .bottle { transform-origin: 150px 70px; animation: tilt 5s cubic-bezier(0.45,0.05,0.55,0.95) forwards; }
+          .stream { animation: streamShow 5s ease-in forwards; }
+          .cup-fill { transform-origin: center bottom; animation: cupFill 5s cubic-bezier(0.4,0.1,0.6,0.95) forwards; }
         `}</style>
 
-        {/* 桌面線 */}
-        <line x1="20" y1="150" x2="200" y2="150" stroke="#3a3025" strokeWidth="1.5"/>
-
-        {/* 豬口杯（ochoko） */}
-        <g>
-          {/* 杯中酒（會上升）— 用 clip 確保不溢出 */}
-          <clipPath id="cupClip"><path d="M64 112 L96 112 L92 142 Q80 148 68 142 Z"/></clipPath>
-          <g clipPath="url(#cupClip)">
-            <rect className="fill" x="64" y="128" width="32" height="16" fill="#d9c47a" opacity="0.9" style={{ transformOrigin: "center bottom" }}/>
-          </g>
-          {/* 杯體 */}
-          <path d="M62 110 L98 110 L93 143 Q80 150 67 143 Z" fill="none" stroke="#e8e0cc" strokeWidth="2.2" strokeLinejoin="round"/>
-          {/* 杯口藍線（清酒杯感） */}
-          <ellipse cx="80" cy="110" rx="18" ry="3.5" fill="none" stroke="#5fa8d3" strokeWidth="1.6"/>
+        {/* ── 豬口杯（黃色線條，左下） ── */}
+        <clipPath id="cupClipInner">
+          <path d="M58 168 L122 168 L114 226 Q90 238 66 226 Z"/>
+        </clipPath>
+        <g clipPath="url(#cupClipInner)">
+          <rect className="cup-fill" x="56" y="168" width="68" height="72" fill="#e8b84b"/>
         </g>
+        <path d="M56 166 L124 166 L115 227 Q90 240 65 227 Z" fill="none" stroke="#c9922a" strokeWidth="3" strokeLinejoin="round"/>
+        <ellipse cx="90" cy="166" rx="34" ry="7" fill="none" stroke="#c9922a" strokeWidth="3"/>
 
-        {/* 酒液流 */}
-        <g className="stream">
-          <path d="M126 96 Q108 104 90 110" fill="none" stroke="#d9c47a" strokeWidth="3" strokeLinecap="round" opacity="0.85"/>
-        </g>
+        {/* ── 酒流（瓶口 → 杯，滿黃色） ── */}
+        <path className="stream" d="M150 78 Q120 120 90 158" fill="none" stroke="#e8b84b" strokeWidth="5" strokeLinecap="round"/>
 
-        {/* 拿酒瓶的手 + 酒瓶（整組傾倒） */}
-        <g className="bottle-grp">
-          {/* 日本酒瓶（一升瓶綠色） */}
-          <g>
-            <rect x="138" y="58" width="24" height="64" rx="5" fill="#2f5d3a" stroke="#9ed4a8" strokeWidth="1.5"/>
-            <rect x="146" y="40" width="8" height="20" fill="#2f5d3a" stroke="#9ed4a8" strokeWidth="1.3"/>
-            {/* 瓶身標籤 */}
-            <rect x="142" y="78" width="16" height="26" rx="1.5" fill="#f3ecd9"/>
-            <line x1="150" y1="82" x2="150" y2="100" stroke="#b73a32" strokeWidth="1.4"/>
-            <text x="150" y="94" textAnchor="middle" fontSize="9" fill="#1a120a" fontFamily="serif" fontWeight="700">酒</text>
-            {/* 瓶蓋（還沒開時在瓶口） */}
-            <rect className="cap" x="145.5" y="36" width="9" height="6" rx="1.5" fill="#c9922a"/>
-          </g>
-          {/* 持瓶的手（簡化握拳） */}
-          <g>
-            <ellipse cx="150" cy="120" rx="13" ry="9" fill="#e8b88a"/>
-            <path d="M139 116 Q137 110 142 109" fill="none" stroke="#d49a6a" strokeWidth="2" strokeLinecap="round"/>
-            <path d="M161 116 Q163 110 158 109" fill="none" stroke="#d49a6a" strokeWidth="2" strokeLinecap="round"/>
-            {/* 手臂 */}
-            <path d="M150 129 Q160 150 178 156" fill="none" stroke="#e8b88a" strokeWidth="11" strokeLinecap="round"/>
-          </g>
-        </g>
-
-        {/* 開瓶的手（先拔蓋再離開） */}
-        <g className="open-hand">
-          <ellipse cx="150" cy="34" rx="9" ry="6.5" fill="#e8b88a"/>
-          <path d="M150 40 Q146 54 132 60" fill="none" stroke="#e8b88a" strokeWidth="9" strokeLinecap="round"/>
+        {/* ── 酒瓶上半部（黃色線條，繞瓶口傾倒） ── */}
+        <g className="bottle">
+          <path d="M138 160 L138 104 Q138 86 144 80 L144 60 Q144 56 147 56 L153 56 Q156 56 156 60 L156 80 Q162 86 162 104 L162 160"
+                fill="none" stroke="#c9922a" strokeWidth="3" strokeLinejoin="round" strokeLinecap="round"/>
+          <line x1="144" y1="68" x2="156" y2="68" stroke="#c9922a" strokeWidth="2.5"/>
         </g>
       </svg>
 
       <div style={{ textAlign: "center" }}>
-        <div className="mincho" style={{ fontSize: 18, color: "#e8b84b", letterSpacing: 2, fontWeight: 700 }}>今天又開哪支酒 ?</div>
-        <div style={{ display: "flex", justifyContent: "center", gap: 5, marginTop: 10 }}>
+        <div className="mincho" style={{ fontSize: 19, color: "#e8b84b", letterSpacing: 2, fontWeight: 700 }}>今天又開哪支酒 ?</div>
+        <div style={{ display: "flex", justifyContent: "center", gap: 5, marginTop: 12 }}>
           {[0, 1, 2].map(i => (
             <div key={i} style={{
               width: 6, height: 6, borderRadius: "50%", background: "#c9922a",
