@@ -338,7 +338,7 @@ export default function App() {
       </header>
 
       {/* ─── Body ─── */}
-      <main className="no-scrollbar" style={{ flex: 1, overflowY: "auto", padding: "4px 16px 90px" }}>
+      <main className="no-scrollbar" style={{ flex: 1, overflowY: "auto", padding: "4px 16px", paddingBottom: "calc(96px + env(safe-area-inset-bottom))" }}>
         {loading ? (
           <StickmanLoading />
         ) : (
@@ -482,20 +482,20 @@ function CellarView(props) {
         </div>
       )}
 
-      {/* 選取工具列（固定在頂部，捲動時不跑掉） */}
+      {/* 選取動作列：固定浮動在底部主功能列上方，捲動絕不跑掉 */}
       {(selectMode || selected.size > 0) && (
-        <div style={{ position: "sticky", top: 0, zIndex: 15, background: "rgba(28,20,8,0.96)", backdropFilter: "blur(10px)", border: "1px solid rgba(201,146,42,0.3)", borderRadius: 12, padding: "10px 13px", marginBottom: 12, boxShadow: "0 4px 16px rgba(0,0,0,0.4)" }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: selected.size > 0 ? 10 : 0 }}>
+        <div style={{ position: "fixed", left: "50%", transform: "translateX(-50%)", bottom: "calc(64px + env(safe-area-inset-bottom))", width: "calc(100% - 24px)", maxWidth: 436, zIndex: 30, background: "rgba(28,20,8,0.97)", backdropFilter: "blur(12px)", border: "1px solid rgba(201,146,42,0.35)", borderRadius: 14, padding: "10px 13px", boxShadow: "0 6px 24px rgba(0,0,0,0.5)" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: selected.size > 0 ? 9 : 0 }}>
             <span style={{ fontSize: 13, color: gold }}>已選 {selected.size} 筆</span>
             <div style={{ display: "flex", gap: 14 }}>
-              <button onClick={selectAll} style={{ background: "none", border: "none", color: "#aaa", fontSize: 12 }}>全選</button>
-              <button onClick={clearSelect} style={{ background: "none", border: "none", color: "#aaa", fontSize: 12 }}>取消</button>
+              <button onClick={selectAll} style={{ background: "none", border: "none", color: "#bba080", fontSize: 12 }}>全選</button>
+              <button onClick={clearSelect} style={{ background: "none", border: "none", color: "#bba080", fontSize: 12 }}>取消</button>
             </div>
           </div>
           {selected.size > 0 && (
             <div style={{ display: "flex", gap: 8 }}>
-              <button onClick={handleBatchDelete} style={{ flex: 1, background: "rgba(183,58,50,0.18)", border: "1px solid rgba(183,58,50,0.4)", color: "#e07a72", borderRadius: 9, padding: "9px", fontSize: 13, fontWeight: 600 }}>🗑️ 刪除 {selected.size} 筆</button>
-              <button onClick={onGoCollage} style={{ flex: 1, background: gold, border: "none", color: "#0e0a06", borderRadius: 9, padding: "9px", fontSize: 13, fontWeight: 600 }}>🖼️ 製作拼接</button>
+              <button onClick={handleBatchDelete} style={{ flex: 1, background: "rgba(183,58,50,0.2)", border: "1px solid rgba(183,58,50,0.4)", color: "#e07a72", borderRadius: 9, padding: "10px", fontSize: 13, fontWeight: 600 }}>🗑️ 刪除 {selected.size} 筆</button>
+              <button onClick={onGoCollage} style={{ flex: 1, background: gold, border: "none", color: "#0e0a06", borderRadius: 9, padding: "10px", fontSize: 13, fontWeight: 600 }}>🖼️ 製作拼接</button>
             </div>
           )}
         </div>
@@ -672,11 +672,19 @@ function CollageView({ sakes, selected, setSelected, setSelectMode, goCellar }) 
 
   return (
     <div className="fade-in">
-      <div style={{ marginBottom: 18 }}>
-        <div className="mincho" style={{ fontSize: 20, color: gold, marginBottom: 6 }}>照片拼接</div>
-        <div style={{ fontSize: 12, color: "#777" }}>
-          {chosen.length > 0 ? `已選 ${chosen.length} 張 · 正方形輸出` : "請先到酒窖選擇照片"}
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 18 }}>
+        <div>
+          <div className="mincho" style={{ fontSize: 20, color: gold, marginBottom: 6 }}>照片拼接</div>
+          <div style={{ fontSize: 12, color: "#777" }}>
+            {chosen.length > 0 ? `已選 ${chosen.length} 張 · 正方形輸出` : "請先到酒窖選擇照片"}
+          </div>
         </div>
+        <button
+          onClick={() => { setSelected(new Set()); setSelectMode(false); goCellar(); }}
+          style={{ flexShrink: 0, background: "rgba(255,255,255,0.06)", border: "1px solid var(--line)", color: "#bba080", borderRadius: 99, padding: "7px 14px", fontSize: 12 }}
+        >
+          ✕ 取消
+        </button>
       </div>
 
       {chosen.length === 0 ? (
@@ -738,67 +746,103 @@ function CollageView({ sakes, selected, setSelected, setSelectMode, goCellar }) 
 // ═══════════════════════════ 載入動畫 ═══════════════════════════
 function StickmanLoading() {
   return (
-    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", minHeight: "60vh", gap: 20 }}>
-      <svg width="160" height="120" viewBox="0 0 160 120" style={{ overflow: "visible" }}>
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", minHeight: "60vh", gap: 24 }}>
+      <svg width="220" height="180" viewBox="0 0 220 180" style={{ overflow: "visible" }}>
         <style>{`
-          @keyframes walk {
-            0%   { transform: translateX(-40px); }
-            100% { transform: translateX(60px); }
+          /* 酒瓶傾倒倒酒：傾斜→倒→回正，循環 */
+          @keyframes pour {
+            0%, 22%   { transform: rotate(0deg); }
+            42%, 70%  { transform: rotate(58deg); }
+            90%, 100% { transform: rotate(0deg); }
           }
-          @keyframes legSwing {
-            0%, 100% { transform: rotate(-30deg); }
-            50%       { transform: rotate(30deg); }
+          /* 酒液流：倒的時候出現 */
+          @keyframes streamShow {
+            0%, 30%   { opacity: 0; }
+            45%, 68%  { opacity: 1; }
+            80%, 100% { opacity: 0; }
           }
-          @keyframes armSwing {
-            0%, 100% { transform: rotate(20deg); }
-            50%       { transform: rotate(-20deg); }
+          /* 杯中酒位上升（用 scaleY，從底部長上來） */
+          @keyframes fillUp {
+            0%, 38%   { transform: scaleY(0); }
+            70%, 100% { transform: scaleY(1); }
           }
-          @keyframes doorOpen {
-            0%   { transform: scaleX(1); }
-            100% { transform: scaleX(0.1); }
+          /* 開瓶手：先靠近拔瓶蓋再離開 */
+          @keyframes openCap {
+            0%        { transform: translate(0,0); opacity: 1; }
+            14%       { transform: translate(0,-2px); opacity: 1; }
+            22%       { transform: translate(18px,-26px) rotate(20deg); opacity: 1; }
+            30%, 100% { transform: translate(40px,-50px) rotate(40deg); opacity: 0; }
           }
-          .stickman { animation: walk 1.8s ease-in-out infinite; }
-          .leg-l { transform-origin: 80px 76px; animation: legSwing 0.45s ease-in-out infinite; }
-          .leg-r { transform-origin: 80px 76px; animation: legSwing 0.45s ease-in-out infinite reverse; }
-          .arm-l { transform-origin: 76px 60px; animation: armSwing 0.45s ease-in-out infinite; }
-          .arm-r { transform-origin: 84px 60px; animation: armSwing 0.45s ease-in-out infinite reverse; }
+          /* 瓶蓋飛走 */
+          @keyframes capFly {
+            0%, 14%   { transform: translate(0,0); opacity: 0; }
+            22%       { opacity: 1; }
+            40%, 100% { transform: translate(34px,-44px) rotate(180deg); opacity: 0; }
+          }
+          .bottle-grp { transform-origin: 150px 120px; animation: pour 4s ease-in-out infinite; }
+          .stream { animation: streamShow 4s ease-in-out infinite; transform-origin: top; }
+          .fill { animation: fillUp 4s ease-in-out infinite; }
+          .open-hand { animation: openCap 4s ease-in-out infinite; }
+          .cap { animation: capFly 4s ease-in-out infinite; }
         `}</style>
 
-        {/* 酒窖大門 */}
-        <rect x="100" y="30" width="52" height="80" rx="3" fill="#1a120a" stroke="#c9922a" strokeWidth="1.5"/>
-        <rect x="100" y="30" width="52" height="80" rx="3" fill="none" stroke="#c9922a66" strokeWidth="0.5"/>
-        {/* 門框 */}
-        <rect x="112" y="50" width="28" height="60" rx="2" fill="#0e0a06" stroke="#c9922a" strokeWidth="1.2"/>
-        {/* 門上文字 */}
-        <text x="126" y="44" textAnchor="middle" fontSize="8" fill="#c9922a" fontFamily="serif" fontWeight="700">酒蔵</text>
-        {/* 門把 */}
-        <circle cx="117" cy="80" r="2.5" fill="#c9922a"/>
-        {/* 地面 */}
-        <line x1="60" y1="110" x2="155" y2="110" stroke="#3a3025" strokeWidth="1.5"/>
+        {/* 桌面線 */}
+        <line x1="20" y1="150" x2="200" y2="150" stroke="#3a3025" strokeWidth="1.5"/>
 
-        {/* 火柴人（整體移動） */}
-        <g className="stickman">
-          {/* 頭 */}
-          <circle cx="80" cy="52" r="8" fill="none" stroke="#e8b84b" strokeWidth="2"/>
-          {/* 身體 */}
-          <line x1="80" y1="60" x2="80" y2="80" stroke="#e8b84b" strokeWidth="2" strokeLinecap="round"/>
-          {/* 左腿 */}
-          <line className="leg-l" x1="80" y1="80" x2="72" y2="96" stroke="#e8b84b" strokeWidth="2" strokeLinecap="round"/>
-          {/* 右腿 */}
-          <line className="leg-r" x1="80" y1="80" x2="88" y2="96" stroke="#e8b84b" strokeWidth="2" strokeLinecap="round"/>
-          {/* 左臂 */}
-          <line className="arm-l" x1="76" y1="63" x2="66" y2="74" stroke="#e8b84b" strokeWidth="2" strokeLinecap="round"/>
-          {/* 右臂 */}
-          <line className="arm-r" x1="84" y1="63" x2="94" y2="74" stroke="#e8b84b" strokeWidth="2" strokeLinecap="round"/>
+        {/* 豬口杯（ochoko） */}
+        <g>
+          {/* 杯中酒（會上升）— 用 clip 確保不溢出 */}
+          <clipPath id="cupClip"><path d="M64 112 L96 112 L92 142 Q80 148 68 142 Z"/></clipPath>
+          <g clipPath="url(#cupClip)">
+            <rect className="fill" x="64" y="128" width="32" height="16" fill="#d9c47a" opacity="0.9" style={{ transformOrigin: "center bottom" }}/>
+          </g>
+          {/* 杯體 */}
+          <path d="M62 110 L98 110 L93 143 Q80 150 67 143 Z" fill="none" stroke="#e8e0cc" strokeWidth="2.2" strokeLinejoin="round"/>
+          {/* 杯口藍線（清酒杯感） */}
+          <ellipse cx="80" cy="110" rx="18" ry="3.5" fill="none" stroke="#5fa8d3" strokeWidth="1.6"/>
+        </g>
+
+        {/* 酒液流 */}
+        <g className="stream">
+          <path d="M126 96 Q108 104 90 110" fill="none" stroke="#d9c47a" strokeWidth="3" strokeLinecap="round" opacity="0.85"/>
+        </g>
+
+        {/* 拿酒瓶的手 + 酒瓶（整組傾倒） */}
+        <g className="bottle-grp">
+          {/* 日本酒瓶（一升瓶綠色） */}
+          <g>
+            <rect x="138" y="58" width="24" height="64" rx="5" fill="#2f5d3a" stroke="#9ed4a8" strokeWidth="1.5"/>
+            <rect x="146" y="40" width="8" height="20" fill="#2f5d3a" stroke="#9ed4a8" strokeWidth="1.3"/>
+            {/* 瓶身標籤 */}
+            <rect x="142" y="78" width="16" height="26" rx="1.5" fill="#f3ecd9"/>
+            <line x1="150" y1="82" x2="150" y2="100" stroke="#b73a32" strokeWidth="1.4"/>
+            <text x="150" y="94" textAnchor="middle" fontSize="9" fill="#1a120a" fontFamily="serif" fontWeight="700">酒</text>
+            {/* 瓶蓋（還沒開時在瓶口） */}
+            <rect className="cap" x="145.5" y="36" width="9" height="6" rx="1.5" fill="#c9922a"/>
+          </g>
+          {/* 持瓶的手（簡化握拳） */}
+          <g>
+            <ellipse cx="150" cy="120" rx="13" ry="9" fill="#e8b88a"/>
+            <path d="M139 116 Q137 110 142 109" fill="none" stroke="#d49a6a" strokeWidth="2" strokeLinecap="round"/>
+            <path d="M161 116 Q163 110 158 109" fill="none" stroke="#d49a6a" strokeWidth="2" strokeLinecap="round"/>
+            {/* 手臂 */}
+            <path d="M150 129 Q160 150 178 156" fill="none" stroke="#e8b88a" strokeWidth="11" strokeLinecap="round"/>
+          </g>
+        </g>
+
+        {/* 開瓶的手（先拔蓋再離開） */}
+        <g className="open-hand">
+          <ellipse cx="150" cy="34" rx="9" ry="6.5" fill="#e8b88a"/>
+          <path d="M150 40 Q146 54 132 60" fill="none" stroke="#e8b88a" strokeWidth="9" strokeLinecap="round"/>
         </g>
       </svg>
 
       <div style={{ textAlign: "center" }}>
-        <div style={{ fontSize: 14, color: "#c9922a", letterSpacing: 3, fontFamily: "serif" }}>打開 酒窖 中</div>
-        <div style={{ display: "flex", justifyContent: "center", gap: 4, marginTop: 8 }}>
+        <div className="mincho" style={{ fontSize: 18, color: "#e8b84b", letterSpacing: 2, fontWeight: 700 }}>今天又開哪支酒 ?</div>
+        <div style={{ display: "flex", justifyContent: "center", gap: 5, marginTop: 10 }}>
           {[0, 1, 2].map(i => (
             <div key={i} style={{
-              width: 5, height: 5, borderRadius: "50%", background: "#c9922a",
+              width: 6, height: 6, borderRadius: "50%", background: "#c9922a",
               animation: `fadeIn 0.6s ${i * 0.2}s ease-in-out infinite alternate`,
               opacity: 0.3,
             }}/>
