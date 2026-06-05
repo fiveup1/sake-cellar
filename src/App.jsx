@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import { fetchSakes, insertSake, updateSake, deleteSake, hasSupabase } from "./lib/db";
-import { analyzeImage, compressImage } from "./lib/analyze";
+import { fetchSakes, fetchAllSakes, insertSake, updateSake, deleteSake, hasSupabase } from "./lib/db";
+import { analyzeImage, compressImage, urlToBase64 } from "./lib/analyze";
 import { extractExif, reverseGeocode } from "./lib/exif";
 import { buildTidyCollage, buildScatteredCollage, downloadDataUrl } from "./lib/collage";
 import TasteMap from "./components/TasteMap";
@@ -21,18 +21,105 @@ export default function App() {
   const [tab, setTab] = useState("cellar");
   const [search, setSearch] = useState("");
   const [filterCat, setFilterCat] = useState("全部");
-  const [sortBy, setSortBy] = useState("new");
+  const [sortBy, setSortBy] = useState("time-desc");
   const [selected, setSelected] = useState(new Set());
   const [selectMode, setSelectMode] = useState(false);
   const [detail, setDetail] = useState(null);
   const [importing, setImporting] = useState(false);
   const [progress, setProgress] = useState({ done: 0, total: 0 });
+  const [hasMore, setHasMore] = useState(true);
+  const [bgLoading, setBgLoading] = useState(false); // 背景預載中
+  const PAGE = 20;
   const abortImportRef = useRef(false);
+  const importingRef = useRef(false);      // 匯入中時暫停背景預載
+  const bgStopRef = useRef(false);         // 卸載時停止背景預載
   const fileRef = useRef();
 
-  // 載入資料
+  // 初次載入：固定 5 秒內盡量載（至少 20 筆保底），時間到才進酒窖
   useEffect(() => {
-    fetchSakes().then(data => { setSakes(data); setLoading(false); });
+    let cancelled = false;
+    const INITIAL_MS = 5000;
+
+    (async () => {
+      const start = Date.now();
+      let buffer = [];
+      let offset = 0;
+      let more = true;
+
+      // 5 秒內連續載入；但至少要載到第一批（20 筆）才結束
+      while (!cancelled && more) {
+        let batch = [];
+        try {
+          batch = await fetchSakes({ limit: PAGE, offset });
+        } catch { batch = []; }
+        buffer = buffer.concat(batch);
+        offset += batch.length;
+        more = batch.length === PAGE;
+
+        const elapsed = Date.now() - start;
+        // 結束條件：時間到且至少有一批（或沒有更多了）
+        if ((elapsed >= INITIAL_MS && buffer.length >= PAGE) || !more) break;
+        // 還沒到 5 秒就全速續載（不間隔）
+      }
+
+      if (cancelled) return;
+      // 補足動畫至少播放 5 秒（避免網路太快動畫一閃而過）
+      const remain = INITIAL_MS - (Date.now() - start);
+      if (remain > 0) await new Promise(r => setTimeout(r, remain));
+      if (cancelled) return;
+
+      setSakes(buffer);
+      setHasMore(more);
+      setLoading(false);
+
+      // 進酒窖後，啟動「操作優先」的背景漸進預載，把剩下的慢慢補完
+      if (more) startBackgroundPreload(offset);
+    })();
+
+    return () => { cancelled = true; bgStopRef.current = true; };
+  }, []);
+
+  // 背景漸進預載：操作優先，利用瀏覽器空閒時段，一批批載到全部完成
+  const startBackgroundPreload = useCallback((startOffset) => {
+    bgStopRef.current = false;
+    setBgLoading(true);
+    let offset = startOffset;
+
+    const idle = (cb) => {
+      if ("requestIdleCallback" in window) window.requestIdleCallback(cb, { timeout: 2000 });
+      else setTimeout(cb, 300);
+    };
+
+    const loadNext = async () => {
+      if (bgStopRef.current) { setBgLoading(false); return; }
+      // 匯入辨識中 → 暫停背景載入，把資源讓給辨識，稍後再試
+      if (importingRef.current) { setTimeout(loadNext, 2000); return; }
+
+      let batch = [];
+      try {
+        batch = await fetchSakes({ limit: PAGE, offset });
+      } catch { batch = []; }
+
+      if (batch.length > 0) {
+        setSakes(prev => {
+          const ids = new Set(prev.map(s => s.id));
+          const fresh = batch.filter(s => !ids.has(s.id));
+          return [...prev, ...fresh];
+        });
+        offset += batch.length;
+      }
+
+      if (batch.length < PAGE) {
+        // 沒有更多了，背景預載完成
+        setHasMore(false);
+        setBgLoading(false);
+        return;
+      }
+      // 還有更多 → 等空閒 + 間隔後再載下一批（操作優先、禮讓）
+      idle(() => setTimeout(loadNext, 1200));
+    };
+
+    idle(() => setTimeout(loadNext, 800));
   }, []);
 
   // ── 篩選 / 排序 ──
@@ -47,9 +134,30 @@ export default function App() {
       const matchCat = filterCat === "全部" || i.category === filterCat;
       return matchQ && matchCat;
     });
-    if (sortBy === "new") list = [...list].sort((a, b) => new Date(b.addedAt) - new Date(a.addedAt));
-    if (sortBy === "name") list = [...list].sort((a, b) => (a.info?.name || "").localeCompare(b.info?.name || "", "ja"));
-    if (sortBy === "brewery") list = [...list].sort((a, b) => (a.info?.brewery || "").localeCompare(b.info?.brewery || "", "ja"));
+    // 排序：sortBy 形如 "time-desc" / "time-asc" / "price-desc" / "price-asc"
+    const parsePrice = (info) => {
+      const p = info?.price;
+      if (!p || p === "null") return null;
+      // 抓出所有數字（去掉逗號），取平均當作代表價
+      const nums = String(p).replace(/,/g, "").match(/\d+/g);
+      if (!nums || nums.length === 0) return null;
+      const vals = nums.map(Number);
+      return vals.reduce((a, b) => a + b, 0) / vals.length;
+    };
+    const [sortKey, sortDir] = (sortBy || "time-desc").split("-");
+    const dir = sortDir === "asc" ? 1 : -1;
+    list = [...list].sort((a, b) => {
+      if (sortKey === "price") {
+        const pa = parsePrice(a.info), pb = parsePrice(b.info);
+        // 沒有價格的排到最後（不受升降影響）
+        if (pa == null && pb == null) return new Date(b.addedAt) - new Date(a.addedAt);
+        if (pa == null) return 1;
+        if (pb == null) return -1;
+        return (pa - pb) * dir;
+      }
+      // 預設依加入時間
+      return (new Date(a.addedAt) - new Date(b.addedAt)) * dir;
+    });
     return list;
   }, [sakes, search, filterCat, sortBy]);
 
@@ -58,9 +166,24 @@ export default function App() {
     const arr = Array.from(files).filter(f => f.type.startsWith("image/"));
     if (!arr.length) return;
     abortImportRef.current = false; // 重置中斷旗標
+    importingRef.current = true;    // 暫停背景預載，資源優先給辨識
     setImporting(true);
     setTab("cellar");
     setProgress({ done: 0, total: arr.length });
+
+    // 🔋 取得螢幕喚醒鎖：匯入期間防止 iPhone 螢幕自動休眠而中斷辨識
+    let wakeLock = null;
+    const acquireWakeLock = async () => {
+      try {
+        if ("wakeLock" in navigator) {
+          wakeLock = await navigator.wakeLock.request("screen");
+        }
+      } catch (e) { console.warn("wakeLock 取得失敗:", e); }
+    };
+    // 螢幕短暫關閉再回來時，重新取得鎖
+    const onVisible = () => { if (document.visibilityState === "visible") acquireWakeLock(); };
+    document.addEventListener("visibilitychange", onVisible);
+    await acquireWakeLock();
 
     let done = 0;
 
@@ -121,7 +244,13 @@ export default function App() {
     };
     await Promise.all(Array.from({ length: Math.min(CONCURRENCY, arr.length) }, worker));
 
+    // 釋放螢幕喚醒鎖、移除監聽
+    document.removeEventListener("visibilitychange", onVisible);
+    try { if (wakeLock) await wakeLock.release(); } catch {}
+    wakeLock = null;
+
     abortImportRef.current = false;
+    importingRef.current = false;   // 恢復背景預載
     setImporting(false);
   }, []);
 
@@ -165,6 +294,29 @@ export default function App() {
     if (failedIds.length > 0) setSelectMode(true);
   }, [filtered]);
 
+  // 修正酒名後重新辨識
+  const handleReanalyze = useCallback(async (sake, correctedName) => {
+    if (!sake?.imageUrl) return;
+    // 標記為辨識中
+    setSakes(prev => prev.map(s => s.id === sake.id ? { ...s, status: "analyzing" } : s));
+    setDetail(prev => prev && prev.id === sake.id ? { ...prev, status: "analyzing" } : prev);
+    try {
+      const base64 = await urlToBase64(sake.imageUrl);
+      const result = await analyzeImage(base64, "image/jpeg", correctedName);
+      const info = result.info
+        ? { ...result.info, name: correctedName || result.info.name, photo_date: sake.photoDate || sake.info?.photo_date || null, location: sake.location || sake.info?.location || null }
+        : null;
+      const updated = { ...sake, info: info || sake.info, status: info ? "done" : "error", errorMsg: result.error || null };
+      // 更新資料庫
+      await updateSake(sake.id, { info: updated.info });
+      setSakes(prev => prev.map(s => s.id === sake.id ? updated : s));
+      setDetail(prev => prev && prev.id === sake.id ? updated : prev);
+    } catch (e) {
+      setSakes(prev => prev.map(s => s.id === sake.id ? { ...s, status: "error", errorMsg: "重新辨識失敗：" + e.message } : s));
+      setDetail(prev => prev && prev.id === sake.id ? { ...prev, status: "error", errorMsg: "重新辨識失敗：" + e.message } : prev);
+    }
+  }, []);
+
   const gold = "#c9922a";
 
   return (
@@ -188,9 +340,7 @@ export default function App() {
       {/* ─── Body ─── */}
       <main className="no-scrollbar" style={{ flex: 1, overflowY: "auto", padding: "4px 16px 90px" }}>
         {loading ? (
-          <div style={{ textAlign: "center", padding: "80px 0", color: "#555" }}>
-            <div style={{ width: 32, height: 32, border: `3px solid ${gold}33`, borderTop: `3px solid ${gold}`, borderRadius: "50%", animation: "spin 1s linear infinite", margin: "0 auto" }} />
-          </div>
+          <StickmanLoading />
         ) : (
           <>
             {tab === "cellar" && (
@@ -204,6 +354,7 @@ export default function App() {
                 handleBatchDelete={handleBatchDelete} selectFailed={selectFailed}
                 onOpen={setDetail} onGoImport={() => setTab("import")} onGoCollage={() => setTab("collage")}
                 importing={importing} progress={progress} cancelImport={cancelImport}
+                bgLoading={bgLoading} hasMore={hasMore}
               />
             )}
             {tab === "import" && (
@@ -211,6 +362,9 @@ export default function App() {
             )}
             {tab === "collage" && (
               <CollageView sakes={sakes} selected={selected} setSelected={setSelected} setSelectMode={setSelectMode} goCellar={() => setTab("cellar")} />
+            )}
+            {tab === "backup" && (
+              <BackupView sakes={sakes} />
             )}
           </>
         )}
@@ -222,6 +376,7 @@ export default function App() {
           { k: "cellar", icon: "蔵", label: "酒窖" },
           { k: "import", icon: "入", label: "匯入" },
           { k: "collage", icon: "繪", label: "拼接" },
+          { k: "backup", icon: "備", label: "備份" },
         ].map(t => (
           <button key={t.k} onClick={() => setTab(t.k)} style={{
             flex: 1, padding: "11px 4px 9px", background: "none", border: "none",
@@ -235,7 +390,7 @@ export default function App() {
         ))}
       </nav>
 
-      {detail && <DetailSheet sake={detail} onClose={() => setDetail(null)} onDelete={handleDelete} />}
+      {detail && <DetailSheet sake={detail} onClose={() => setDetail(null)} onDelete={handleDelete} onReanalyze={handleReanalyze} />}
     </div>
   );
 }
@@ -243,10 +398,18 @@ export default function App() {
 // ═══════════════════════════ 酒窖 ═══════════════════════════
 function CellarView(props) {
   const { sakes, filtered, cats, search, setSearch, filterCat, setFilterCat, sortBy, setSortBy,
-    selected, selectMode, setSelectMode, toggleSelect, selectAll, clearSelect, handleBatchDelete, selectFailed, onOpen, onGoImport, onGoCollage, importing, progress, cancelImport } = props;
+    selected, selectMode, setSelectMode, toggleSelect, selectAll, clearSelect, handleBatchDelete, selectFailed, onOpen, onGoImport, onGoCollage, importing, progress, cancelImport,
+    bgLoading, hasMore } = props;
   const gold = "#c9922a";
   const [showSort, setShowSort] = useState(false);
-  const sortLabels = { new: "最新加入", name: "酒名", brewery: "酒造" };
+  // 排序選項：依加入時間 / 依價格，各有升降序
+  const sortOptions = [
+    { k: "time-desc", label: "加入時間（新→舊）" },
+    { k: "time-asc", label: "加入時間（舊→新）" },
+    { k: "price-desc", label: "價格（高→低）" },
+    { k: "price-asc", label: "價格（低→高）" },
+  ];
+  const sortShort = { "time-desc": "最新加入", "time-asc": "最早加入", "price-desc": "價格高→低", "price-asc": "價格低→高" };
   const failedCount = filtered.filter(s => s.status === "error").length;
 
   return (
@@ -286,19 +449,19 @@ function CellarView(props) {
             }}>{c}</button>
           ))}
         </div>
-        <button onClick={() => setShowSort(v => !v)} style={{ background: "rgba(255,255,255,0.05)", border: "1px solid var(--line)", borderRadius: 10, padding: "7px 10px", color: "#999", fontSize: 11, whiteSpace: "nowrap" }}>
-          ↕ {sortLabels[sortBy]}
+        <button onClick={() => setShowSort(v => !v)} style={{ background: "rgba(255,255,255,0.05)", border: "1px solid var(--line)", borderRadius: 10, padding: "7px 10px", color: "#bba080", fontSize: 11, whiteSpace: "nowrap" }}>
+          ↕ {sortShort[sortBy] || "排序"}
         </button>
       </div>
       {showSort && (
-        <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-          {Object.entries(sortLabels).map(([k, v]) => (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 12, background: "rgba(255,255,255,0.03)", borderRadius: 12, padding: 8 }}>
+          {sortOptions.map(({ k, label }) => (
             <button key={k} onClick={() => { setSortBy(k); setShowSort(false); }} style={{
-              flex: 1, padding: "8px", borderRadius: 9, fontSize: 12,
+              textAlign: "left", padding: "10px 12px", borderRadius: 9, fontSize: 13,
               background: sortBy === k ? "rgba(201,146,42,0.2)" : "rgba(255,255,255,0.04)",
               border: `1px solid ${sortBy === k ? "rgba(201,146,42,0.4)" : "var(--line)"}`,
-              color: sortBy === k ? gold : "#888",
-            }}>{v}</button>
+              color: sortBy === k ? gold : "#aaa", fontWeight: sortBy === k ? 600 : 400,
+            }}>{sortBy === k ? "✓ " : ""}{label}</button>
           ))}
         </div>
       )}
@@ -319,9 +482,9 @@ function CellarView(props) {
         </div>
       )}
 
-      {/* 選取工具列 */}
+      {/* 選取工具列（固定在頂部，捲動時不跑掉） */}
       {(selectMode || selected.size > 0) && (
-        <div style={{ background: "rgba(201,146,42,0.12)", border: "1px solid rgba(201,146,42,0.25)", borderRadius: 12, padding: "10px 13px", marginBottom: 12 }}>
+        <div style={{ position: "sticky", top: 0, zIndex: 15, background: "rgba(28,20,8,0.96)", backdropFilter: "blur(10px)", border: "1px solid rgba(201,146,42,0.3)", borderRadius: 12, padding: "10px 13px", marginBottom: 12, boxShadow: "0 4px 16px rgba(0,0,0,0.4)" }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: selected.size > 0 ? 10 : 0 }}>
             <span style={{ fontSize: 13, color: gold }}>已選 {selected.size} 筆</span>
             <div style={{ display: "flex", gap: 14 }}>
@@ -351,17 +514,31 @@ function CellarView(props) {
           )}
         </div>
       ) : (
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-          {filtered.map(s => (
-            <SakeCard key={s.id} sake={s} selected={selected.has(s.id)}
-              selectMode={selectMode || selected.size > 0}
-              onSelect={toggleSelect} onOpen={onOpen} onLongPress={() => setSelectMode(true)} />
-          ))}
-        </div>
+        <>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            {filtered.map(s => (
+              <SakeCard key={s.id} sake={s} selected={selected.has(s.id)}
+                selectMode={selectMode || selected.size > 0}
+                onSelect={toggleSelect} onOpen={onOpen} onLongPress={() => setSelectMode(true)} />
+            ))}
+          </div>
+          {/* 背景自動載入指示（操作優先，不需手動點） */}
+          {hasMore && bgLoading && (
+            <div style={{ textAlign: "center", padding: "18px 0", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+              <div style={{ width: 14, height: 14, border: `2px solid ${gold}44`, borderTop: `2px solid ${gold}`, borderRadius: "50%", animation: "spin 1s linear infinite" }} />
+              <span style={{ fontSize: 11, color: "#665a44" }}>背景載入更多酒款中…</span>
+            </div>
+          )}
+          {!hasMore && filtered.length > PAGE_HINT && (
+            <div style={{ textAlign: "center", padding: "18px 0", fontSize: 11, color: "#4a4236" }}>— 已全部載入 —</div>
+          )}
+        </>
       )}
     </div>
   );
 }
+
+const PAGE_HINT = 20;
 
 // ── 酒卡 ──
 function SakeCard({ sake, selected, selectMode, onSelect, onOpen, onLongPress }) {
@@ -558,11 +735,253 @@ function CollageView({ sakes, selected, setSelected, setSelectMode, goCellar }) 
   );
 }
 
+// ═══════════════════════════ 載入動畫 ═══════════════════════════
+function StickmanLoading() {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", minHeight: "60vh", gap: 20 }}>
+      <svg width="160" height="120" viewBox="0 0 160 120" style={{ overflow: "visible" }}>
+        <style>{`
+          @keyframes walk {
+            0%   { transform: translateX(-40px); }
+            100% { transform: translateX(60px); }
+          }
+          @keyframes legSwing {
+            0%, 100% { transform: rotate(-30deg); }
+            50%       { transform: rotate(30deg); }
+          }
+          @keyframes armSwing {
+            0%, 100% { transform: rotate(20deg); }
+            50%       { transform: rotate(-20deg); }
+          }
+          @keyframes doorOpen {
+            0%   { transform: scaleX(1); }
+            100% { transform: scaleX(0.1); }
+          }
+          .stickman { animation: walk 1.8s ease-in-out infinite; }
+          .leg-l { transform-origin: 80px 76px; animation: legSwing 0.45s ease-in-out infinite; }
+          .leg-r { transform-origin: 80px 76px; animation: legSwing 0.45s ease-in-out infinite reverse; }
+          .arm-l { transform-origin: 76px 60px; animation: armSwing 0.45s ease-in-out infinite; }
+          .arm-r { transform-origin: 84px 60px; animation: armSwing 0.45s ease-in-out infinite reverse; }
+        `}</style>
+
+        {/* 酒窖大門 */}
+        <rect x="100" y="30" width="52" height="80" rx="3" fill="#1a120a" stroke="#c9922a" strokeWidth="1.5"/>
+        <rect x="100" y="30" width="52" height="80" rx="3" fill="none" stroke="#c9922a66" strokeWidth="0.5"/>
+        {/* 門框 */}
+        <rect x="112" y="50" width="28" height="60" rx="2" fill="#0e0a06" stroke="#c9922a" strokeWidth="1.2"/>
+        {/* 門上文字 */}
+        <text x="126" y="44" textAnchor="middle" fontSize="8" fill="#c9922a" fontFamily="serif" fontWeight="700">酒蔵</text>
+        {/* 門把 */}
+        <circle cx="117" cy="80" r="2.5" fill="#c9922a"/>
+        {/* 地面 */}
+        <line x1="60" y1="110" x2="155" y2="110" stroke="#3a3025" strokeWidth="1.5"/>
+
+        {/* 火柴人（整體移動） */}
+        <g className="stickman">
+          {/* 頭 */}
+          <circle cx="80" cy="52" r="8" fill="none" stroke="#e8b84b" strokeWidth="2"/>
+          {/* 身體 */}
+          <line x1="80" y1="60" x2="80" y2="80" stroke="#e8b84b" strokeWidth="2" strokeLinecap="round"/>
+          {/* 左腿 */}
+          <line className="leg-l" x1="80" y1="80" x2="72" y2="96" stroke="#e8b84b" strokeWidth="2" strokeLinecap="round"/>
+          {/* 右腿 */}
+          <line className="leg-r" x1="80" y1="80" x2="88" y2="96" stroke="#e8b84b" strokeWidth="2" strokeLinecap="round"/>
+          {/* 左臂 */}
+          <line className="arm-l" x1="76" y1="63" x2="66" y2="74" stroke="#e8b84b" strokeWidth="2" strokeLinecap="round"/>
+          {/* 右臂 */}
+          <line className="arm-r" x1="84" y1="63" x2="94" y2="74" stroke="#e8b84b" strokeWidth="2" strokeLinecap="round"/>
+        </g>
+      </svg>
+
+      <div style={{ textAlign: "center" }}>
+        <div style={{ fontSize: 14, color: "#c9922a", letterSpacing: 3, fontFamily: "serif" }}>打開 酒窖 中</div>
+        <div style={{ display: "flex", justifyContent: "center", gap: 4, marginTop: 8 }}>
+          {[0, 1, 2].map(i => (
+            <div key={i} style={{
+              width: 5, height: 5, borderRadius: "50%", background: "#c9922a",
+              animation: `fadeIn 0.6s ${i * 0.2}s ease-in-out infinite alternate`,
+              opacity: 0.3,
+            }}/>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════ 備份 ═══════════════════════════
+function BackupView({ sakes }) {
+  const [exporting, setExporting] = useState(false);
+  const [done, setDone] = useState(false);
+  const [statusMsg, setStatusMsg] = useState("");
+  const gold = "#c9922a";
+
+  const handleBackup = async () => {
+    setExporting(true);
+    setDone(false);
+    setStatusMsg("讀取所有資料中…");
+    try {
+      const { default: JSZip } = await import("jszip");
+
+      // 備份要包含「全部」資料，而非只有畫面上已載入的那頁
+      let allSakes = [];
+      try {
+        allSakes = await fetchAllSakes();
+      } catch {
+        allSakes = sakes; // 萬一失敗，至少備份已載入的
+      }
+      if (!allSakes || allSakes.length === 0) allSakes = sakes;
+
+      const zip = new JSZip();
+      const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+      const folder = zip.folder(`sake_backup_${dateStr}`);
+      const imgFolder = folder.folder("images");
+
+      // 產生 data.json（全部酒資料）
+      const exportData = allSakes
+        .filter(s => s.status === "done" && s.info)
+        .map((s, idx) => ({
+          id: s.id,
+          imageFilename: `images/sake_${String(idx + 1).padStart(3, "0")}.jpg`,
+          addedAt: s.addedAt,
+          photoDate: s.photoDate || s.info?.photo_date || null,
+          location: s.location || s.info?.location || null,
+          info: s.info,
+        }));
+
+      folder.file("data.json", JSON.stringify(exportData, null, 2));
+
+      // README
+      folder.file("README.txt",
+        "酒蔵録 備份檔案\n" +
+        "=================\n" +
+        `備份時間：${new Date().toLocaleString("zh-TW")}\n` +
+        `共 ${exportData.length} 筆記錄\n\n` +
+        "data.json  — 所有酒的辨識資料（陣列）\n" +
+        "images/    — 對應的酒瓶照片\n\n" +
+        "每筆資料的 imageFilename 對應 images 資料夾內的檔案\n" +
+        "可匯入任何支援此格式的酒窖 App"
+      );
+
+      // 下載圖片並加入 ZIP
+      const doneList = allSakes.filter(s => s.status === "done" && s.info);
+      for (let idx = 0; idx < doneList.length; idx++) {
+        const sake = doneList[idx];
+        setStatusMsg(`打包照片 ${idx + 1}/${doneList.length}…`);
+        if (!sake?.imageUrl) continue;
+        try {
+          const res = await fetch(sake.imageUrl);
+          const blob = await res.blob();
+          const filename = `sake_${String(idx + 1).padStart(3, "0")}.jpg`;
+          imgFolder.file(filename, blob);
+        } catch (e) {
+          console.warn("圖片下載失敗:", e);
+        }
+      }
+
+      setStatusMsg("壓縮中…");
+      const zipBlob = await zip.generateAsync({ type: "blob" });
+      const url = URL.createObjectURL(zipBlob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `sake_backup_${dateStr}.zip`;
+      a.click();
+      URL.revokeObjectURL(url);
+      setStatusMsg("");
+      setDone(true);
+    } catch (e) {
+      console.error("備份失敗:", e);
+      alert("備份失敗：" + e.message);
+    }
+    setExporting(false);
+  };
+
+  const successCount = sakes.filter(s => s.status === "done" && s.info).length;
+
+  return (
+    <div className="fade-in">
+      <div style={{ marginBottom: 22 }}>
+        <div className="mincho" style={{ fontSize: 20, color: gold, marginBottom: 6 }}>備份資料</div>
+        <div style={{ fontSize: 12, color: "#777", lineHeight: 1.6 }}>將所有酒窖資料打包成 ZIP，可還原至任何裝置或新版本</div>
+      </div>
+
+      {/* 統計 */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 22 }}>
+        <div style={{ background: "rgba(201,146,42,0.08)", border: "1px solid rgba(201,146,42,0.2)", borderRadius: 13, padding: "16px 14px", textAlign: "center" }}>
+          <div className="mincho" style={{ fontSize: 28, color: gold, fontWeight: 700 }}>{sakes.length}</div>
+          <div style={{ fontSize: 11, color: "#888", marginTop: 4 }}>酒窖總筆數</div>
+        </div>
+        <div style={{ background: "rgba(255,255,255,0.04)", border: "1px solid var(--line)", borderRadius: 13, padding: "16px 14px", textAlign: "center" }}>
+          <div className="mincho" style={{ fontSize: 28, color: "#e8b84b", fontWeight: 700 }}>{successCount}</div>
+          <div style={{ fontSize: 11, color: "#888", marginTop: 4 }}>含辨識資料</div>
+        </div>
+      </div>
+
+      {/* 說明 */}
+      <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid var(--line)", borderRadius: 13, padding: "16px", marginBottom: 22 }}>
+        <div style={{ fontSize: 12, color: "#888", lineHeight: 1.9 }}>
+          <strong style={{ color: gold }}>備份內容</strong><br />
+          📄 data.json — 所有辨識資料（酒名、品牌、產地、精米步合…全部欄位）<br />
+          🖼️ images/ — 原始酒瓶照片<br />
+          📋 README.txt — 欄位說明<br /><br />
+          <strong style={{ color: gold }}>ZIP 結構</strong><br />
+          sake_backup_日期.zip<br />
+          {"  "}├ data.json<br />
+          {"  "}├ images/<br />
+          {"  "}└ README.txt
+        </div>
+      </div>
+
+      <button
+        onClick={handleBackup}
+        disabled={exporting}
+        style={{
+          width: "100%",
+          background: exporting ? "#333" : `linear-gradient(135deg,${gold},#e8b84b)`,
+          border: "none",
+          color: exporting ? "#888" : "#0e0a06",
+          borderRadius: 13,
+          padding: "15px",
+          fontSize: 15,
+          fontWeight: 700,
+          letterSpacing: 1,
+        }}
+      >
+        {exporting ? "備份中，請稍候…" : done ? "✅ 備份完成！" : "⬇ 一鍵備份全部資料"}
+      </button>
+
+      {exporting && (
+        <div style={{ textAlign: "center", marginTop: 14, fontSize: 12, color: gold }}>
+          {statusMsg || "處理中…"}
+        </div>
+      )}
+      {done && (
+        <div style={{ textAlign: "center", marginTop: 14, fontSize: 12, color: "#6a5" }}>
+          ZIP 已下載到你的裝置，可存到 iCloud / Google Drive 做永久備份
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ═══════════════════════════ 詳情 ═══════════════════════════
-function DetailSheet({ sake, onClose, onDelete }) {
+function DetailSheet({ sake, onClose, onDelete, onReanalyze }) {
   const i = sake.info || {};
   const isSake = i.category === "日本酒";
   const color = catColor(i.category);
+  const [editingName, setEditingName] = useState(false);
+  const [nameInput, setNameInput] = useState(i.name || "");
+  const isAnalyzing = sake.status === "analyzing";
+
+  // 當切換到不同酒款時，同步名稱輸入
+  useEffect(() => { setNameInput((sake.info || {}).name || ""); setEditingName(false); }, [sake.id, sake.info]);
+
+  const doReanalyze = () => {
+    const n = nameInput.trim();
+    if (!n) { alert("請先輸入正確的酒名"); return; }
+    setEditingName(false);
+    onReanalyze && onReanalyze(sake, n);
+  };
 
   const sakeRows = [
     ["精米步合", i.seimai], ["使用酒米", i.rice], ["使用酵母", i.yeast],
@@ -614,9 +1033,42 @@ function DetailSheet({ sake, onClose, onDelete }) {
             {(i.tags || []).map((t, x) => <span key={x} style={{ fontSize: 11, background: "rgba(255,255,255,0.06)", color: "#aaa", padding: "3px 11px", borderRadius: 99 }}>{t}</span>)}
           </div>
 
-          <div className="mincho" style={{ fontSize: 21, color: "var(--ink)", fontWeight: 700, lineHeight: 1.35, marginBottom: 3 }}>{i.name || "未知酒款"}</div>
-          {i.name_kana && <div style={{ fontSize: 12, color: "#7a6a4a", marginBottom: 6 }}>{i.name_kana}</div>}
+          {/* 酒名（可編輯 + 修正再辨識） */}
+          {!editingName ? (
+            <>
+              <div style={{ display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 3 }}>
+                <div className="mincho" style={{ flex: 1, fontSize: 21, color: "var(--ink)", fontWeight: 700, lineHeight: 1.35 }}>{i.name || "未知酒款"}</div>
+                {!isAnalyzing && (
+                  <button onClick={() => { setNameInput(i.name || ""); setEditingName(true); }} style={{ flexShrink: 0, marginTop: 2, background: "rgba(255,255,255,0.06)", border: "1px solid var(--line)", color: "#bba080", borderRadius: 8, padding: "5px 10px", fontSize: 11 }}>✏️ 修正</button>
+                )}
+              </div>
+              {i.name_kana && <div style={{ fontSize: 12, color: "#7a6a4a", marginBottom: 6 }}>{i.name_kana}</div>}
+            </>
+          ) : (
+            <div style={{ background: "rgba(201,146,42,0.08)", border: "1px solid rgba(201,146,42,0.25)", borderRadius: 12, padding: "12px 14px", marginBottom: 10 }}>
+              <div style={{ fontSize: 11, color: gold, marginBottom: 8 }}>輸入正確酒名，重新查詢這支酒的資訊</div>
+              <input
+                value={nameInput}
+                onChange={e => setNameInput(e.target.value)}
+                placeholder="例如：鶴齡 純米吟釀"
+                autoFocus
+                style={{ width: "100%", background: "rgba(0,0,0,0.3)", border: "1px solid var(--line)", borderRadius: 9, padding: "10px 12px", color: "var(--ink)", fontSize: 15, outline: "none", marginBottom: 10 }}
+              />
+              <div style={{ display: "flex", gap: 8 }}>
+                <button onClick={doReanalyze} style={{ flex: 1, background: `linear-gradient(135deg,${gold},#e8b84b)`, border: "none", color: "#0e0a06", borderRadius: 9, padding: "10px", fontSize: 13, fontWeight: 700 }}>🔄 修正再辨識</button>
+                <button onClick={() => setEditingName(false)} style={{ padding: "10px 16px", background: "rgba(255,255,255,0.06)", border: "1px solid var(--line)", color: "#aaa", borderRadius: 9, fontSize: 13 }}>取消</button>
+              </div>
+            </div>
+          )}
           <div style={{ fontSize: 13, color: gold, marginBottom: 12 }}>{[i.brewery, i.region].filter(Boolean).join(" · ")}</div>
+
+          {/* 重新辨識中提示 */}
+          {isAnalyzing && (
+            <div style={{ display: "flex", alignItems: "center", gap: 10, background: "rgba(201,146,42,0.08)", border: "1px solid rgba(201,146,42,0.2)", borderRadius: 12, padding: "12px 15px", marginBottom: 16 }}>
+              <div style={{ width: 20, height: 20, border: `2.5px solid ${gold}44`, borderTop: `2.5px solid ${gold}`, borderRadius: "50%", animation: "spin 1s linear infinite" }} />
+              <span style={{ fontSize: 13, color: gold }}>重新辨識中…</span>
+            </div>
+          )}
 
           {/* 辨識失敗診斷訊息 */}
           {sake.status === "error" && (sake.errorMsg || sake.rawDebug) && (

@@ -11,7 +11,26 @@ const LOCAL_KEY = "sake_cellar_v1";
 
 // ── 統一資料存取層（自動切換 Supabase / localStorage）──────────────────────
 
-export async function fetchSakes() {
+// 分頁載入（limit/offset），加速初次開啟
+export async function fetchSakes({ limit = 20, offset = 0 } = {}) {
+  if (hasSupabase) {
+    const { data, error } = await supabase
+      .from("sakes")
+      .select("*")
+      .order("added_at", { ascending: false })
+      .range(offset, offset + limit - 1);
+    if (error) { console.error(error); return []; }
+    return (data || []).map(rowToSake);
+  }
+  try {
+    const d = localStorage.getItem(LOCAL_KEY);
+    const all = d ? JSON.parse(d) : [];
+    return all.slice(offset, offset + limit);
+  } catch { return []; }
+}
+
+// 備份用：一次撈全部
+export async function fetchAllSakes() {
   if (hasSupabase) {
     const { data, error } = await supabase
       .from("sakes")

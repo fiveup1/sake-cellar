@@ -81,8 +81,13 @@ export default async function handler(req, res) {
   if (!apiKey) return res.status(500).json({ error: "ANTHROPIC_API_KEY not configured" });
 
   try {
-    const { image, mimeType = "image/jpeg" } = req.body;
+    const { image, mimeType = "image/jpeg", nameHint } = req.body;
     if (!image) return res.status(400).json({ error: "No image provided" });
+
+    // 使用者修正酒名後重新辨識：把正確酒名當作強提示
+    const promptText = nameHint
+      ? `使用者已確認這支酒的正確名稱為「${nameHint}」。請以此名稱為準（酒標可能是書法體導致先前辨識錯誤），依你對這支酒的知識，重新提供完整正確的資訊。\n\n${SAKE_PROMPT}`
+      : SAKE_PROMPT;
 
     const r = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -98,7 +103,7 @@ export default async function handler(req, res) {
           role: "user",
           content: [
             { type: "image", source: { type: "base64", media_type: mimeType, data: image } },
-            { type: "text", text: SAKE_PROMPT },
+            { type: "text", text: promptText },
           ],
         }],
       }),
