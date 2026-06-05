@@ -1483,24 +1483,14 @@ function SharedCellar({ token }) {
   const [showSort, setShowSort] = useState(false);
   const [detail, setDetail] = useState(null);
   const gold = "#c9922a";
-  const PAGE = 20;
 
-  // 載入資料
+  // 載入資料：分享頁一次載全部，讓朋友看到完整酒窖
   useEffect(() => {
     (async () => {
       setLoading(true);
-      let buffer = [];
-      let offset = 0;
-      let more = true;
-      while (more) {
-        const batch = await fetchSakesPublic(token, { limit: PAGE, offset });
-        if (batch === null) { setInvalid(true); setLoading(false); return; }
-        buffer = buffer.concat(batch);
-        offset += batch.length;
-        more = batch.length === PAGE;
-        if (buffer.length >= 60) break; // 避免無限載入
-      }
-      setSakes(buffer);
+      const all = await fetchAllSakesPublic(token);
+      if (all === null) { setInvalid(true); setLoading(false); return; }
+      setSakes(all);
       setLoading(false);
     })();
   }, [token]);
