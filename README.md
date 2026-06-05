@@ -1,4 +1,4 @@
-# 🍶 酒蔵録 SAKE CELLAR — 部署完全指南
+# 🍶 酒蔵録 SAKE CELLAR — 部署完全指南 
 
 一個專為**日本酒收藏**設計的 AI 辨識管理 App，可安裝到 iPhone 主畫面，像原生 App 一樣使用。
 
