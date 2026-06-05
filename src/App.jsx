@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import { fetchSakes, fetchAllSakes, insertSake, updateSake, deleteSake, hasSupabase } from "./lib/db";
+import { fetchSakes, fetchAllSakes, insertSake, updateSake, deleteSake, hasSupabase, uploadBackImage, createShareToken, getShareToken, deleteShareToken, fetchSakesPublic, fetchAllSakesPublic, verifyShareToken } from "./lib/db";
 import { analyzeImage, compressImage, urlToBase64 } from "./lib/analyze";
 import { extractExif, reverseGeocode } from "./lib/exif";
 import { buildTidyCollage, buildScatteredCollage, downloadDataUrl } from "./lib/collage";
@@ -16,6 +16,16 @@ const catColor = (cat) => {
 };
 
 export default function App() {
+  // ── 分享頁路由：URL 是 /share/xxx 就直接顯示唯讀酒窖 ──
+  // 注意：這裡不能提早 return（React hooks 規則），改用 AppInner 包裝
+  const shareMatch = typeof window !== "undefined" && window.location.pathname.match(/^\/share\/([a-f0-9-]{36})$/i);
+  if (shareMatch) {
+    return <SharedCellar token={shareMatch[1]} />;
+  }
+  return <AppInner />;
+}
+
+function AppInner() {
   const [sakes, setSakes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState("cellar");
@@ -294,20 +304,18 @@ export default function App() {
     if (failedIds.length > 0) setSelectMode(true);
   }, [filtered]);
 
-  // 修正酒名後重新辨識
-  const handleReanalyze = useCallback(async (sake, correctedName) => {
+  // 修正酒名後重新辨識（可附加背面圖）
+  const handleReanalyze = useCallback(async (sake, correctedName, backImageBase64 = null) => {
     if (!sake?.imageUrl) return;
-    // 標記為辨識中
     setSakes(prev => prev.map(s => s.id === sake.id ? { ...s, status: "analyzing" } : s));
     setDetail(prev => prev && prev.id === sake.id ? { ...prev, status: "analyzing" } : prev);
     try {
       const base64 = await urlToBase64(sake.imageUrl);
-      const result = await analyzeImage(base64, "image/jpeg", correctedName);
+      const result = await analyzeImage(base64, "image/jpeg", correctedName, 0, backImageBase64, "image/jpeg");
       const info = result.info
         ? { ...result.info, name: correctedName || result.info.name, photo_date: sake.photoDate || sake.info?.photo_date || null, location: sake.location || sake.info?.location || null }
         : null;
       const updated = { ...sake, info: info || sake.info, status: info ? "done" : "error", errorMsg: result.error || null };
-      // 更新資料庫
       await updateSake(sake.id, { info: updated.info });
       setSakes(prev => prev.map(s => s.id === sake.id ? updated : s));
       setDetail(prev => prev && prev.id === sake.id ? updated : prev);
@@ -366,6 +374,9 @@ export default function App() {
             {tab === "backup" && (
               <BackupView sakes={sakes} />
             )}
+            {tab === "share" && (
+              <ShareView sakes={sakes} />
+            )}
           </>
         )}
       </main>
@@ -377,6 +388,7 @@ export default function App() {
           { k: "import", icon: "入", label: "匯入" },
           { k: "collage", icon: "繪", label: "拼接" },
           { k: "backup", icon: "備", label: "備份" },
+          { k: "share", icon: "享", label: "分享" },
         ].map(t => (
           <button key={t.k} onClick={() => setTab(t.k)} style={{
             flex: 1, padding: "11px 4px 9px", background: "none", border: "none",
@@ -390,7 +402,19 @@ export default function App() {
         ))}
       </nav>
 
-      {detail && <DetailSheet sake={detail} onClose={() => setDetail(null)} onDelete={handleDelete} onReanalyze={handleReanalyze} />}
+      {detail && <DetailSheet sake={detail} onClose={() => setDetail(null)} onDelete={handleDelete} onReanalyze={handleReanalyze}
+        onSaveBackImage={async (sakeId, blob, dataUrl) => {
+          // 儲存背面圖片 URL 到 DB
+          let backUrl = dataUrl;
+          if (hasSupabase) {
+            const uploaded = await uploadBackImage(sakeId, blob);
+            if (uploaded) backUrl = uploaded;
+          }
+          await updateSake(sakeId, { backImageUrl: backUrl });
+          setSakes(prev => prev.map(s => s.id === sakeId ? { ...s, backImageUrl: backUrl } : s));
+          setDetail(prev => prev && prev.id === sakeId ? { ...prev, backImageUrl: backUrl } : prev);
+        }}
+      />}
     </div>
   );
 }
@@ -962,22 +986,70 @@ function BackupView({ sakes }) {
 }
 
 // ═══════════════════════════ 詳情 ═══════════════════════════
-function DetailSheet({ sake, onClose, onDelete, onReanalyze }) {
+function DetailSheet({ sake, onClose, onDelete, onReanalyze, onSaveBackImage }) {
   const i = sake.info || {};
   const isSake = i.category === "日本酒";
   const color = catColor(i.category);
   const [editingName, setEditingName] = useState(false);
   const [nameInput, setNameInput] = useState(i.name || "");
+  const [imgIndex, setImgIndex] = useState(0); // 0=正面, 1=背面
+  const [backPreview, setBackPreview] = useState(null); // { dataUrl, base64, blob }
+  const [savingBack, setSavingBack] = useState(false);
+  const backFileRef = useRef();
   const isAnalyzing = sake.status === "analyzing";
 
-  // 當切換到不同酒款時，同步名稱輸入
-  useEffect(() => { setNameInput((sake.info || {}).name || ""); setEditingName(false); }, [sake.id, sake.info]);
+  const hasBack = !!(sake.backImageUrl || backPreview);
+  const images = [sake.imageUrl, sake.backImageUrl || (backPreview?.dataUrl)].filter(Boolean);
 
+  // 切換不同酒款時重置
+  useEffect(() => {
+    setNameInput((sake.info || {}).name || "");
+    setEditingName(false);
+    setImgIndex(0);
+    setBackPreview(null);
+  }, [sake.id, sake.info]);
+
+  // 滑動切換圖片（touch）
+  const touchStartX = useRef(null);
+  const handleTouchStart = (e) => { touchStartX.current = e.touches[0].clientX; };
+  const handleTouchEnd = (e) => {
+    if (touchStartX.current === null || images.length < 2) return;
+    const dx = e.changedTouches[0].clientX - touchStartX.current;
+    if (Math.abs(dx) > 40) {
+      setImgIndex(prev => {
+        if (dx < 0) return Math.min(prev + 1, images.length - 1);
+        return Math.max(prev - 1, 0);
+      });
+    }
+    touchStartX.current = null;
+  };
+
+  // 選取背面圖片
+  const handlePickBack = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    compressImage(file).then(({ blob, dataUrl, base64 }) => {
+      setBackPreview({ dataUrl, base64, blob });
+      setImgIndex(1); // 自動切換顯示背面
+    });
+    e.target.value = "";
+  };
+
+  // 儲存背面圖片
+  const handleSaveBack = async () => {
+    if (!backPreview) return;
+    setSavingBack(true);
+    await onSaveBackImage?.(sake.id, backPreview.blob, backPreview.dataUrl);
+    setSavingBack(false);
+    setBackPreview(null);
+  };
+
+  // 修正再辨識（帶入背面圖）
   const doReanalyze = () => {
     const n = nameInput.trim();
-    if (!n) { alert("請先輸入正確的酒名"); return; }
     setEditingName(false);
-    onReanalyze && onReanalyze(sake, n);
+    const backB64 = backPreview?.base64 || null;
+    onReanalyze && onReanalyze(sake, n || null, backB64);
   };
 
   const sakeRows = [
@@ -995,29 +1067,82 @@ function DetailSheet({ sake, onClose, onDelete, onReanalyze }) {
   return (
     <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.8)", zIndex: 100, display: "flex", alignItems: "flex-end", justifyContent: "center" }}>
       <div onClick={e => e.stopPropagation()} style={{ background: "#15100a", borderRadius: "22px 22px 0 0", maxWidth: 460, width: "100%", maxHeight: "calc(100dvh - env(safe-area-inset-top) - 12px)", overflowY: "auto", animation: "slideUp .3s cubic-bezier(0.2,0.8,0.2,1)", paddingBottom: "env(safe-area-inset-bottom)" }} className="no-scrollbar">
-        {/* 頂部固定列：返回鍵 + 抓桿 */}
+        {/* 頂部固定列 */}
         <div style={{ position: "sticky", top: 0, paddingTop: 14, paddingBottom: 10, background: "#15100a", zIndex: 5, borderRadius: "22px 22px 0 0" }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "center", position: "relative", paddingLeft: 14, paddingRight: 14, minHeight: 40 }}>
-            <button
-              onClick={onClose}
-              style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", display: "flex", alignItems: "center", gap: 3, background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.12)", color: "var(--ink)", borderRadius: 99, padding: "8px 15px 8px 11px", fontSize: 13, fontWeight: 500 }}
-            >
+            <button onClick={onClose} style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", display: "flex", alignItems: "center", gap: 3, background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.12)", color: "var(--ink)", borderRadius: 99, padding: "8px 15px 8px 11px", fontSize: 13, fontWeight: 500 }}>
               <span style={{ fontSize: 17, lineHeight: 1, marginTop: -1 }}>‹</span> 返回
             </button>
             <div style={{ width: 40, height: 4, background: "#3a3025", borderRadius: 99 }} />
-            <button
-              onClick={onClose}
-              style={{ position: "absolute", right: 14, top: "50%", transform: "translateY(-50%)", width: 34, height: 34, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.12)", color: "#aaa", borderRadius: 99, fontSize: 14 }}
-            >
-              ✕
-            </button>
+            <button onClick={onClose} style={{ position: "absolute", right: 14, top: "50%", transform: "translateY(-50%)", width: 34, height: 34, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.12)", color: "#aaa", borderRadius: 99, fontSize: 14 }}>✕</button>
           </div>
         </div>
 
+        {/* 圖片區（可左右滑動切換正/背面） */}
         {sake.imageUrl && (
           <div style={{ padding: "8px 16px 0" }}>
-            <div style={{ borderRadius: 14, overflow: "hidden", maxHeight: 280, display: "flex", justifyContent: "center", background: "#0a0704" }}>
-              <img src={sake.imageUrl} alt="" style={{ width: "100%", objectFit: "contain", maxHeight: 280 }} />
+            <div
+              style={{ borderRadius: 14, overflow: "hidden", maxHeight: 280, display: "flex", justifyContent: "center", background: "#0a0704", position: "relative", userSelect: "none" }}
+              onTouchStart={handleTouchStart}
+              onTouchEnd={handleTouchEnd}
+            >
+              <img
+                src={images[imgIndex] || sake.imageUrl}
+                alt=""
+                style={{ width: "100%", objectFit: "contain", maxHeight: 280, transition: "opacity .2s" }}
+              />
+              {/* 正/背面指示點 */}
+              {images.length > 1 && (
+                <div style={{ position: "absolute", bottom: 10, left: 0, right: 0, display: "flex", justifyContent: "center", gap: 6 }}>
+                  {images.map((_, idx) => (
+                    <div key={idx} onClick={() => setImgIndex(idx)} style={{ width: idx === imgIndex ? 18 : 7, height: 7, borderRadius: 99, background: idx === imgIndex ? gold : "rgba(255,255,255,0.35)", transition: "all .2s", cursor: "pointer" }} />
+                  ))}
+                </div>
+              )}
+              {/* 圖片標籤 */}
+              {images.length > 1 && (
+                <div style={{ position: "absolute", top: 10, right: 10, background: "rgba(0,0,0,0.6)", color: imgIndex === 0 ? "#e8b84b" : "#7bb8d3", fontSize: 10, padding: "3px 9px", borderRadius: 99, backdropFilter: "blur(4px)" }}>
+                  {imgIndex === 0 ? "正面" : "背面"}
+                </div>
+              )}
+              {/* 左右箭頭（有多張時） */}
+              {images.length > 1 && imgIndex > 0 && (
+                <button onClick={() => setImgIndex(0)} style={{ position: "absolute", left: 8, top: "50%", transform: "translateY(-50%)", background: "rgba(0,0,0,0.5)", border: "none", color: "#fff", borderRadius: 99, width: 30, height: 30, fontSize: 16, cursor: "pointer" }}>‹</button>
+              )}
+              {images.length > 1 && imgIndex < images.length - 1 && (
+                <button onClick={() => setImgIndex(1)} style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", background: "rgba(0,0,0,0.5)", border: "none", color: "#fff", borderRadius: 99, width: 30, height: 30, fontSize: 16, cursor: "pointer" }}>›</button>
+              )}
+            </div>
+
+            {/* 背面圖片操作列 */}
+            <div style={{ display: "flex", gap: 8, marginTop: 8, alignItems: "center" }}>
+              {!hasBack ? (
+                <button
+                  onClick={() => backFileRef.current?.click()}
+                  style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, background: "rgba(91,168,211,0.1)", border: "1px dashed rgba(91,168,211,0.4)", color: "#7bb8d3", borderRadius: 10, padding: "8px", fontSize: 12 }}
+                >
+                  📷 加入背面酒標
+                </button>
+              ) : (
+                <>
+                  <button
+                    onClick={() => backFileRef.current?.click()}
+                    style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, background: "rgba(91,168,211,0.08)", border: "1px solid rgba(91,168,211,0.3)", color: "#7bb8d3", borderRadius: 10, padding: "8px", fontSize: 12 }}
+                  >
+                    🔄 更換背面圖
+                  </button>
+                  {backPreview && !savingBack && (
+                    <button
+                      onClick={handleSaveBack}
+                      style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 4, background: "rgba(91,168,211,0.18)", border: "1px solid rgba(91,168,211,0.5)", color: "#7bb8d3", borderRadius: 10, padding: "8px", fontSize: 12, fontWeight: 600 }}
+                    >
+                      💾 儲存背面圖
+                    </button>
+                  )}
+                  {savingBack && <span style={{ flex: 1, textAlign: "center", fontSize: 12, color: "#7bb8d3" }}>儲存中…</span>}
+                </>
+              )}
+              <input ref={backFileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={handlePickBack} />
             </div>
           </div>
         )}
@@ -1030,7 +1155,7 @@ function DetailSheet({ sake, onClose, onDelete, onReanalyze }) {
             {(i.tags || []).map((t, x) => <span key={x} style={{ fontSize: 11, background: "rgba(255,255,255,0.06)", color: "#aaa", padding: "3px 11px", borderRadius: 99 }}>{t}</span>)}
           </div>
 
-          {/* 酒名（可編輯 + 修正再辨識） */}
+          {/* 酒名（可編輯 + 修正再辨識，現在也可加入背面圖） */}
           {!editingName ? (
             <>
               <div style={{ display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 3 }}>
@@ -1043,16 +1168,27 @@ function DetailSheet({ sake, onClose, onDelete, onReanalyze }) {
             </>
           ) : (
             <div style={{ background: "rgba(201,146,42,0.08)", border: "1px solid rgba(201,146,42,0.25)", borderRadius: 12, padding: "12px 14px", marginBottom: 10 }}>
-              <div style={{ fontSize: 11, color: gold, marginBottom: 8 }}>輸入正確酒名，重新查詢這支酒的資訊</div>
+              <div style={{ fontSize: 11, color: gold, marginBottom: 8 }}>修正酒名 + 重新辨識</div>
               <input
                 value={nameInput}
                 onChange={e => setNameInput(e.target.value)}
-                placeholder="例如：鶴齡 純米吟釀"
+                placeholder="例如：鶴齡 純米吟釀（留空則純用圖片辨識）"
                 autoFocus
                 style={{ width: "100%", background: "rgba(0,0,0,0.3)", border: "1px solid var(--line)", borderRadius: 9, padding: "10px 12px", color: "var(--ink)", fontSize: 15, outline: "none", marginBottom: 10 }}
               />
+              {/* 提示：有背面圖會一起送辨識 */}
+              {hasBack && (
+                <div style={{ fontSize: 11, color: "#7bb8d3", background: "rgba(91,168,211,0.08)", border: "1px solid rgba(91,168,211,0.25)", borderRadius: 8, padding: "7px 10px", marginBottom: 10 }}>
+                  📷 背面酒標也會一起送 AI 加強辨識
+                </div>
+              )}
+              {!hasBack && (
+                <div style={{ fontSize: 11, color: "#665a44", marginBottom: 10 }}>
+                  💡 可先加入背面酒標，讓 AI 辨識更準確
+                </div>
+              )}
               <div style={{ display: "flex", gap: 8 }}>
-                <button onClick={doReanalyze} style={{ flex: 1, background: `linear-gradient(135deg,${gold},#e8b84b)`, border: "none", color: "#0e0a06", borderRadius: 9, padding: "10px", fontSize: 13, fontWeight: 700 }}>🔄 修正再辨識</button>
+                <button onClick={doReanalyze} style={{ flex: 1, background: `linear-gradient(135deg,${gold},#e8b84b)`, border: "none", color: "#0e0a06", borderRadius: 9, padding: "10px", fontSize: 13, fontWeight: 700 }}>🔄 {hasBack ? "正+背面加強辨識" : "修正再辨識"}</button>
                 <button onClick={() => setEditingName(false)} style={{ padding: "10px 16px", background: "rgba(255,255,255,0.06)", border: "1px solid var(--line)", color: "#aaa", borderRadius: 9, fontSize: 13 }}>取消</button>
               </div>
             </div>
@@ -1067,7 +1203,7 @@ function DetailSheet({ sake, onClose, onDelete, onReanalyze }) {
             </div>
           )}
 
-          {/* 辨識失敗診斷訊息 */}
+          {/* 辨識失敗訊息 */}
           {sake.status === "error" && (sake.errorMsg || sake.rawDebug) && (
             <div style={{ background: "rgba(183,58,50,0.1)", border: "1px solid rgba(183,58,50,0.3)", borderRadius: 12, padding: "13px 15px", marginBottom: 16 }}>
               <div style={{ fontSize: 11, color: "#d96a62", marginBottom: 6, fontWeight: 600 }}>⚠️ 辨識失敗原因</div>
@@ -1116,7 +1252,7 @@ function DetailSheet({ sake, onClose, onDelete, onReanalyze }) {
             </div>
           )}
 
-          {/* 味わいMAP（日本酒專屬） */}
+          {/* 味わいMAP */}
           {isSake && (i.sake_meter || i.acidity) && (
             <div style={{ background: "rgba(255,255,255,0.03)", borderRadius: 12, padding: "16px", marginBottom: 16, display: "flex", justifyContent: "center" }}>
               <TasteMap info={i} />
@@ -1172,6 +1308,491 @@ function DetailSheet({ sake, onClose, onDelete, onReanalyze }) {
           <div style={{ fontSize: 11, color: "#4a4236", marginBottom: 14 }}>記錄於 {new Date(sake.addedAt).toLocaleDateString("zh-TW")}</div>
 
           <button onClick={() => { if (confirm("確定刪除這瓶酒的記錄？")) { onDelete(sake.id); onClose(); } }} style={{ width: "100%", background: "rgba(183,58,50,0.12)", border: "1px solid rgba(183,58,50,0.3)", color: "#d96a62", borderRadius: 11, padding: "11px", fontSize: 13 }}>刪除此記錄</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════ 分享管理 ═══════════════════════════
+function ShareView({ sakes }) {
+  const [shareUrl, setShareUrl] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [creating, setCreating] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [currentToken, setCurrentToken] = useState(null);
+  const gold = "#c9922a";
+
+  // 載入現有 token
+  useEffect(() => {
+    (async () => {
+      setLoading(true);
+      const token = await getShareToken();
+      if (token) {
+        setCurrentToken(token);
+        setShareUrl(`${window.location.origin}/share/${token}`);
+      }
+      setLoading(false);
+    })();
+  }, []);
+
+  const handleCreate = async () => {
+    setCreating(true);
+    const token = await createShareToken();
+    if (token) {
+      setCurrentToken(token);
+      setShareUrl(`${window.location.origin}/share/${token}`);
+    }
+    setCreating(false);
+  };
+
+  const handleRevoke = async () => {
+    if (!currentToken) return;
+    if (!confirm("確定要關閉分享連結？舊連結將立即失效，朋友無法再瀏覽。")) return;
+    await deleteShareToken(currentToken);
+    setCurrentToken(null);
+    setShareUrl(null);
+  };
+
+  const handleCopy = async () => {
+    if (!shareUrl) return;
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // fallback
+      const el = document.createElement("textarea");
+      el.value = shareUrl;
+      document.body.appendChild(el);
+      el.select();
+      document.execCommand("copy");
+      document.body.removeChild(el);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
+
+  if (!hasSupabase) {
+    return (
+      <div className="fade-in" style={{ padding: "20px 0" }}>
+        <div className="mincho" style={{ fontSize: 20, color: gold, marginBottom: 10 }}>分享酒窖</div>
+        <div style={{ background: "rgba(255,255,255,0.04)", border: "1px solid var(--line)", borderRadius: 13, padding: 20, color: "#888", fontSize: 13, lineHeight: 1.7 }}>
+          分享功能需要 Supabase 資料庫支援。<br />請先在 .env 設定 VITE_SUPABASE_URL 和 VITE_SUPABASE_ANON_KEY。
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="fade-in">
+      <div style={{ marginBottom: 22 }}>
+        <div className="mincho" style={{ fontSize: 20, color: gold, marginBottom: 6 }}>分享酒窖</div>
+        <div style={{ fontSize: 12, color: "#777", lineHeight: 1.6 }}>產生唯讀連結，朋友可瀏覽、搜尋你的酒窖，但無法修改或刪除</div>
+      </div>
+
+      {/* 功能說明 */}
+      <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid var(--line)", borderRadius: 13, padding: "16px", marginBottom: 20 }}>
+        <div style={{ fontSize: 12, color: "#888", lineHeight: 1.9 }}>
+          <strong style={{ color: gold }}>朋友可以做的事</strong><br />
+          🔍 搜尋酒名、酒造、產地<br />
+          🏷️ 按酒種分類篩選<br />
+          ↕️ 依時間或價格排序<br />
+          📖 查看每支酒的完整資料<br /><br />
+          <strong style={{ color: gold }}>朋友不能做的事</strong><br />
+          ✗ 新增 / 刪除 / 修改任何記錄
+        </div>
+      </div>
+
+      {loading ? (
+        <div style={{ textAlign: "center", padding: "30px", color: gold, fontSize: 13 }}>載入中…</div>
+      ) : shareUrl ? (
+        <>
+          {/* 連結顯示 */}
+          <div style={{ background: "rgba(201,146,42,0.08)", border: "1px solid rgba(201,146,42,0.3)", borderRadius: 13, padding: "16px", marginBottom: 14 }}>
+            <div style={{ fontSize: 10, color: gold, letterSpacing: 1, marginBottom: 8 }}>✅ 分享連結已啟用</div>
+            <div style={{ fontSize: 11, color: "#bba080", wordBreak: "break-all", lineHeight: 1.6, background: "rgba(0,0,0,0.2)", borderRadius: 8, padding: "8px 10px", marginBottom: 12 }}>
+              {shareUrl}
+            </div>
+            <button
+              onClick={handleCopy}
+              style={{ width: "100%", background: copied ? "rgba(80,160,80,0.2)" : `linear-gradient(135deg,${gold},#e8b84b)`, border: copied ? "1px solid rgba(80,160,80,0.5)" : "none", color: copied ? "#6a8" : "#0e0a06", borderRadius: 10, padding: "12px", fontSize: 14, fontWeight: 700 }}
+            >
+              {copied ? "✅ 已複製！" : "📋 複製連結"}
+            </button>
+          </div>
+
+          {/* 統計 */}
+          <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid var(--line)", borderRadius: 12, padding: "13px 16px", marginBottom: 14, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <span style={{ fontSize: 12, color: "#888" }}>酒窖共 {sakes.filter(s => s.status === "done").length} 支酒可供瀏覽</span>
+            <span style={{ fontSize: 11, color: "#5a5042" }}>含辨識資料</span>
+          </div>
+
+          {/* 關閉連結 */}
+          <button
+            onClick={handleRevoke}
+            style={{ width: "100%", background: "rgba(183,58,50,0.1)", border: "1px solid rgba(183,58,50,0.3)", color: "#d96a62", borderRadius: 11, padding: "11px", fontSize: 13 }}
+          >
+            🔒 關閉此分享連結
+          </button>
+          <div style={{ fontSize: 11, color: "#4a4236", textAlign: "center", marginTop: 8 }}>
+            關閉後舊連結立即失效，可重新產生新連結
+          </div>
+        </>
+      ) : (
+        <>
+          <div style={{ textAlign: "center", padding: "30px 20px", color: "#4a4236", marginBottom: 16 }}>
+            <div className="mincho" style={{ fontSize: 44, color: "#3a3025", marginBottom: 12 }}>享</div>
+            <div style={{ fontSize: 13, color: "#665a44" }}>尚未建立分享連結</div>
+          </div>
+          <button
+            onClick={handleCreate}
+            disabled={creating}
+            style={{ width: "100%", background: creating ? "#333" : `linear-gradient(135deg,${gold},#e8b84b)`, border: "none", color: creating ? "#888" : "#0e0a06", borderRadius: 13, padding: "15px", fontSize: 15, fontWeight: 700 }}
+          >
+            {creating ? "建立中…" : "🔗 產生唯讀分享連結"}
+          </button>
+          <div style={{ fontSize: 11, color: "#5a5042", textAlign: "center", marginTop: 10, lineHeight: 1.6 }}>
+            連結可隨時關閉，關閉後立即失效
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════ 唯讀分享酒窖 ═══════════════════════════
+function SharedCellar({ token }) {
+  const [sakes, setSakes] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [invalid, setInvalid] = useState(false);
+  const [search, setSearch] = useState("");
+  const [filterCat, setFilterCat] = useState("全部");
+  const [sortBy, setSortBy] = useState("time-desc");
+  const [showSort, setShowSort] = useState(false);
+  const [detail, setDetail] = useState(null);
+  const gold = "#c9922a";
+  const PAGE = 20;
+
+  // 載入資料
+  useEffect(() => {
+    (async () => {
+      setLoading(true);
+      let buffer = [];
+      let offset = 0;
+      let more = true;
+      while (more) {
+        const batch = await fetchSakesPublic(token, { limit: PAGE, offset });
+        if (batch === null) { setInvalid(true); setLoading(false); return; }
+        buffer = buffer.concat(batch);
+        offset += batch.length;
+        more = batch.length === PAGE;
+        if (buffer.length >= 60) break; // 避免無限載入
+      }
+      setSakes(buffer);
+      setLoading(false);
+    })();
+  }, [token]);
+
+  const cats = useMemo(() => ["全部", ...new Set(sakes.map(s => s.info?.category).filter(Boolean))], [sakes]);
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    let list = sakes.filter(s => {
+      const i = s.info || {};
+      const matchQ = !q || [i.name, i.name_kana, i.brewery, i.region, i.rice, i.tokutei, i.grapes, ...(i.tags || [])].filter(Boolean).some(v => String(v).toLowerCase().includes(q));
+      const matchCat = filterCat === "全部" || i.category === filterCat;
+      return matchQ && matchCat;
+    });
+    const parsePrice = (info) => {
+      const p = info?.price;
+      if (!p || p === "null") return null;
+      const nums = String(p).replace(/,/g, "").match(/\d+/g);
+      if (!nums || nums.length === 0) return null;
+      const vals = nums.map(Number);
+      return vals.reduce((a, b) => a + b, 0) / vals.length;
+    };
+    const [sortKey, sortDir] = (sortBy || "time-desc").split("-");
+    const dir = sortDir === "asc" ? 1 : -1;
+    list = [...list].sort((a, b) => {
+      if (sortKey === "price") {
+        const pa = parsePrice(a.info), pb = parsePrice(b.info);
+        if (pa == null && pb == null) return new Date(b.addedAt) - new Date(a.addedAt);
+        if (pa == null) return 1; if (pb == null) return -1;
+        return (pa - pb) * dir;
+      }
+      return (new Date(a.addedAt) - new Date(b.addedAt)) * dir;
+    });
+    return list;
+  }, [sakes, search, filterCat, sortBy]);
+
+  const sortOptions = [
+    { k: "time-desc", label: "加入時間（新→舊）" },
+    { k: "time-asc", label: "加入時間（舊→新）" },
+    { k: "price-desc", label: "價格（高→低）" },
+    { k: "price-asc", label: "價格（低→高）" },
+  ];
+  const sortShort = { "time-desc": "最新加入", "time-asc": "最早加入", "price-desc": "價格高→低", "price-asc": "價格低→高" };
+
+  if (invalid) {
+    return (
+      <div style={{ maxWidth: 460, margin: "0 auto", minHeight: "100dvh", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 30, background: "#0e0a06", color: "#888" }}>
+        <div className="mincho" style={{ fontSize: 48, color: "#3a3025", marginBottom: 16 }}>酒蔵録</div>
+        <div style={{ fontSize: 16, color: "#d96a62", marginBottom: 8 }}>連結已失效或不存在</div>
+        <div style={{ fontSize: 12, color: "#5a5042", textAlign: "center", lineHeight: 1.7 }}>此分享連結已被主人關閉，或連結有誤。<br />請向分享者索取最新連結。</div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ maxWidth: 460, margin: "0 auto", minHeight: "100dvh", display: "flex", flexDirection: "column", background: "#0e0a06", color: "var(--ink)" }}>
+      {/* Header */}
+      <header style={{ padding: "max(20px, env(safe-area-inset-top)) 20px 14px", background: "linear-gradient(180deg, #170f05, transparent)", position: "sticky", top: 0, zIndex: 20, backdropFilter: "blur(8px)" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div>
+            <div className="mincho" style={{ fontSize: 26, fontWeight: 800, color: gold, letterSpacing: 4, lineHeight: 1 }}>酒蔵録</div>
+            <div style={{ fontSize: 10, color: "#6a5d45", letterSpacing: 3, marginTop: 5 }}>SAKE CELLAR · 共享酒窖</div>
+          </div>
+          <div style={{ fontSize: 10, background: "rgba(201,146,42,0.12)", color: "#bba080", border: "1px solid rgba(201,146,42,0.25)", borderRadius: 8, padding: "4px 10px" }}>
+            👁 唯讀模式
+          </div>
+        </div>
+      </header>
+
+      <main className="no-scrollbar" style={{ flex: 1, overflowY: "auto", padding: "4px 16px", paddingBottom: "calc(32px + env(safe-area-inset-bottom))" }}>
+        {loading ? (
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "50vh" }}>
+            <div style={{ textAlign: "center" }}>
+              <div style={{ width: 36, height: 36, border: `3px solid ${gold}33`, borderTop: `3px solid ${gold}`, borderRadius: "50%", animation: "spin 1s linear infinite", margin: "0 auto 14px" }} />
+              <div style={{ fontSize: 13, color: gold }}>載入酒窖中…</div>
+            </div>
+          </div>
+        ) : (
+          <div className="fade-in">
+            {/* 搜尋列 */}
+            <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+              <div style={{ position: "relative", flex: 1 }}>
+                <span style={{ position: "absolute", left: 13, top: "50%", transform: "translateY(-50%)", color: "#5a5042", fontSize: 14 }}>🔍</span>
+                <input value={search} onChange={e => setSearch(e.target.value)} placeholder="搜尋 酒名 · 酒造 · 産地 · 酒米"
+                  style={{ width: "100%", background: "rgba(255,255,255,0.05)", border: "1px solid var(--line)", borderRadius: 12, padding: "11px 14px 11px 38px", color: "var(--ink)", fontSize: 13, outline: "none" }} />
+              </div>
+            </div>
+
+            {/* 分類 + 排序 */}
+            <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 12 }}>
+              <div className="no-scrollbar" style={{ display: "flex", gap: 7, overflowX: "auto", flex: 1 }}>
+                {cats.map(c => (
+                  <button key={c} onClick={() => setFilterCat(c)} style={{ whiteSpace: "nowrap", padding: "6px 13px", borderRadius: 99, fontSize: 12, background: filterCat === c ? gold : "rgba(255,255,255,0.05)", border: filterCat === c ? "none" : "1px solid var(--line)", color: filterCat === c ? "#0e0a06" : "#999", fontWeight: filterCat === c ? 600 : 400 }}>{c}</button>
+                ))}
+              </div>
+              <button onClick={() => setShowSort(v => !v)} style={{ background: "rgba(255,255,255,0.05)", border: "1px solid var(--line)", borderRadius: 10, padding: "7px 10px", color: "#bba080", fontSize: 11, whiteSpace: "nowrap" }}>
+                ↕ {sortShort[sortBy] || "排序"}
+              </button>
+            </div>
+            {showSort && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 12, background: "rgba(255,255,255,0.03)", borderRadius: 12, padding: 8 }}>
+                {sortOptions.map(({ k, label }) => (
+                  <button key={k} onClick={() => { setSortBy(k); setShowSort(false); }} style={{ textAlign: "left", padding: "10px 12px", borderRadius: 9, fontSize: 13, background: sortBy === k ? "rgba(201,146,42,0.2)" : "rgba(255,255,255,0.04)", border: `1px solid ${sortBy === k ? "rgba(201,146,42,0.4)" : "var(--line)"}`, color: sortBy === k ? gold : "#aaa", fontWeight: sortBy === k ? 600 : 400 }}>
+                    {sortBy === k ? "✓ " : ""}{label}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {/* 計數 */}
+            <div style={{ fontSize: 11, color: "#4a4236", marginBottom: 12 }}>
+              {filtered.length} 支{filterCat !== "全部" ? ` ${filterCat}` : ""}
+              {search ? ` · 搜尋「${search}」` : ""}
+            </div>
+
+            {/* 酒格列表 */}
+            {filtered.length === 0 ? (
+              <div style={{ textAlign: "center", padding: "50px 20px", color: "#4a4236" }}>
+                <div className="mincho" style={{ fontSize: 40, marginBottom: 10 }}>🍶</div>
+                <div style={{ fontSize: 13 }}>找不到符合條件的酒款</div>
+              </div>
+            ) : (
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 11 }}>
+                {filtered.map(sake => (
+                  <SakeCard key={sake.id} sake={sake} selected={false} selectMode={false} onSelect={() => {}} onOpen={setDetail} />
+                ))}
+              </div>
+            )}
+
+            <div style={{ textAlign: "center", padding: "24px 0 8px", fontSize: 11, color: "#3a3025" }}>
+              酒蔵録 · 唯讀分享模式
+            </div>
+          </div>
+        )}
+      </main>
+
+      {/* 唯讀詳情（不顯示刪除 / 修正按鈕） */}
+      {detail && (
+        <SharedDetailSheet sake={detail} onClose={() => setDetail(null)} />
+      )}
+
+      <style>{`
+        @keyframes spin { to { transform: rotate(360deg); } }
+        @keyframes slideUp { from { transform: translateY(100%); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+        .fade-in { animation: fadeIn .3s ease; }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        .no-scrollbar { scrollbar-width: none; }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .mincho { font-family: 'Noto Serif JP', 'Hiragino Mincho Pro', serif; }
+        * { box-sizing: border-box; }
+        :root { --ink: #e8d5b0; --line: rgba(255,255,255,0.08); }
+        body { background: #0e0a06; margin: 0; font-family: -apple-system, sans-serif; color: var(--ink); }
+      `}</style>
+    </div>
+  );
+}
+
+// 唯讀詳情 Sheet（不含修正 / 刪除 / 背面上傳功能）
+function SharedDetailSheet({ sake, onClose }) {
+  const i = sake.info || {};
+  const isSake = i.category === "日本酒";
+  const color = catColor(i.category);
+  const gold = "#c9922a";
+  const [imgIndex, setImgIndex] = useState(0);
+  const images = [sake.imageUrl, sake.backImageUrl].filter(Boolean);
+
+  const touchStartX = useRef(null);
+  const handleTouchStart = (e) => { touchStartX.current = e.touches[0].clientX; };
+  const handleTouchEnd = (e) => {
+    if (touchStartX.current === null || images.length < 2) return;
+    const dx = e.changedTouches[0].clientX - touchStartX.current;
+    if (Math.abs(dx) > 40) setImgIndex(prev => dx < 0 ? Math.min(prev + 1, images.length - 1) : Math.max(prev - 1, 0));
+    touchStartX.current = null;
+  };
+
+  const sakeRows = [["精米步合", i.seimai], ["使用酒米", i.rice], ["使用酵母", i.yeast], ["酒精濃度", i.alcohol], ["甘辛度", i.sweetness]].filter(([, v]) => v);
+  const wineRows = [["品種", i.grapes], ["年份", i.vintage], ["甜度", i.sweetness], ["酒精濃度", i.alcohol]].filter(([, v]) => v);
+  const rows = isSake ? sakeRows : wineRows;
+
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.8)", zIndex: 100, display: "flex", alignItems: "flex-end", justifyContent: "center" }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: "#15100a", borderRadius: "22px 22px 0 0", maxWidth: 460, width: "100%", maxHeight: "calc(100dvh - env(safe-area-inset-top) - 12px)", overflowY: "auto", animation: "slideUp .3s cubic-bezier(0.2,0.8,0.2,1)", paddingBottom: "env(safe-area-inset-bottom)" }} className="no-scrollbar">
+        <div style={{ position: "sticky", top: 0, paddingTop: 14, paddingBottom: 10, background: "#15100a", zIndex: 5, borderRadius: "22px 22px 0 0" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", position: "relative", paddingLeft: 14, paddingRight: 14, minHeight: 40 }}>
+            <button onClick={onClose} style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", display: "flex", alignItems: "center", gap: 3, background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.12)", color: "var(--ink)", borderRadius: 99, padding: "8px 15px 8px 11px", fontSize: 13, fontWeight: 500 }}>
+              <span style={{ fontSize: 17, lineHeight: 1, marginTop: -1 }}>‹</span> 返回
+            </button>
+            <div style={{ width: 40, height: 4, background: "#3a3025", borderRadius: 99 }} />
+            <button onClick={onClose} style={{ position: "absolute", right: 14, top: "50%", transform: "translateY(-50%)", width: 34, height: 34, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.12)", color: "#aaa", borderRadius: 99, fontSize: 14 }}>✕</button>
+          </div>
+        </div>
+
+        {sake.imageUrl && (
+          <div style={{ padding: "8px 16px 0" }}>
+            <div style={{ borderRadius: 14, overflow: "hidden", maxHeight: 280, display: "flex", justifyContent: "center", background: "#0a0704", position: "relative", userSelect: "none" }}
+              onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd}>
+              <img src={images[imgIndex] || sake.imageUrl} alt="" style={{ width: "100%", objectFit: "contain", maxHeight: 280 }} />
+              {images.length > 1 && (
+                <div style={{ position: "absolute", bottom: 10, left: 0, right: 0, display: "flex", justifyContent: "center", gap: 6 }}>
+                  {images.map((_, idx) => (
+                    <div key={idx} onClick={() => setImgIndex(idx)} style={{ width: idx === imgIndex ? 18 : 7, height: 7, borderRadius: 99, background: idx === imgIndex ? gold : "rgba(255,255,255,0.35)", transition: "all .2s", cursor: "pointer" }} />
+                  ))}
+                </div>
+              )}
+              {images.length > 1 && (
+                <div style={{ position: "absolute", top: 10, right: 10, background: "rgba(0,0,0,0.6)", color: imgIndex === 0 ? "#e8b84b" : "#7bb8d3", fontSize: 10, padding: "3px 9px", borderRadius: 99 }}>
+                  {imgIndex === 0 ? "正面" : "背面"}
+                </div>
+              )}
+              {images.length > 1 && imgIndex > 0 && (
+                <button onClick={() => setImgIndex(0)} style={{ position: "absolute", left: 8, top: "50%", transform: "translateY(-50%)", background: "rgba(0,0,0,0.5)", border: "none", color: "#fff", borderRadius: 99, width: 30, height: 30, fontSize: 16, cursor: "pointer" }}>‹</button>
+              )}
+              {images.length > 1 && imgIndex < images.length - 1 && (
+                <button onClick={() => setImgIndex(1)} style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", background: "rgba(0,0,0,0.5)", border: "none", color: "#fff", borderRadius: 99, width: 30, height: 30, fontSize: 16, cursor: "pointer" }}>›</button>
+              )}
+            </div>
+          </div>
+        )}
+
+        <div style={{ padding: "16px 20px 28px" }}>
+          <div style={{ display: "flex", gap: 7, flexWrap: "wrap", marginBottom: 10 }}>
+            <span className="mincho" style={{ fontSize: 11, background: color, color: "#fff", padding: "3px 11px", borderRadius: 99, fontWeight: 600 }}>{i.category || "酒"}</span>
+            {i.tokutei && <span style={{ fontSize: 11, background: "rgba(201,146,42,0.18)", color: gold, padding: "3px 11px", borderRadius: 99 }}>{i.tokutei}</span>}
+            {(i.tags || []).map((t, x) => <span key={x} style={{ fontSize: 11, background: "rgba(255,255,255,0.06)", color: "#aaa", padding: "3px 11px", borderRadius: 99 }}>{t}</span>)}
+          </div>
+          <div className="mincho" style={{ fontSize: 21, color: "var(--ink)", fontWeight: 700, lineHeight: 1.35, marginBottom: 3 }}>{i.name || "未知酒款"}</div>
+          {i.name_kana && <div style={{ fontSize: 12, color: "#7a6a4a", marginBottom: 6 }}>{i.name_kana}</div>}
+          <div style={{ fontSize: 13, color: gold, marginBottom: 12 }}>{[i.brewery, i.region].filter(Boolean).join(" · ")}</div>
+
+          {(sake.photoDate || sake.location || i.photo_date || i.location) && (
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
+              {(sake.photoDate || i.photo_date) && <span style={{ fontSize: 12, background: "rgba(255,255,255,0.05)", color: "#bba080", padding: "5px 11px", borderRadius: 99 }}>📅 {sake.photoDate || i.photo_date}</span>}
+              {(sake.location || i.location) && <span style={{ fontSize: 12, background: "rgba(255,255,255,0.05)", color: "#bba080", padding: "5px 11px", borderRadius: 99 }}>📍 {sake.location || i.location}</span>}
+            </div>
+          )}
+
+          {i.flavors && (
+            <div style={{ background: "rgba(201,146,42,0.07)", border: "1px solid rgba(201,146,42,0.15)", borderRadius: 12, padding: "13px 15px", marginBottom: 16 }}>
+              <div style={{ fontSize: 10, color: gold, letterSpacing: 1.5, marginBottom: 5 }}>味わい / TASTING</div>
+              <div style={{ fontSize: 13, color: "#d0c0a0", lineHeight: 1.7 }}>{i.flavors}</div>
+            </div>
+          )}
+
+          {i.price && i.price !== "null" && (
+            <div style={{ display: "flex", alignItems: "center", gap: 12, background: "rgba(201,146,42,0.1)", border: "1px solid rgba(201,146,42,0.2)", borderRadius: 12, padding: "13px 16px", marginBottom: 16 }}>
+              <span style={{ fontSize: 22 }}>💰</span>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 10, color: gold, letterSpacing: 1, marginBottom: 2 }}>台灣參考售價</div>
+                <div className="mincho" style={{ fontSize: 17, color: "var(--ink)", fontWeight: 700 }}>{i.price}</div>
+              </div>
+              <span style={{ fontSize: 9, color: "#665a44", textAlign: "right", lineHeight: 1.4, maxWidth: 70 }}>AI 估算<br/>僅供參考</span>
+            </div>
+          )}
+
+          {isSake && (i.sake_meter || i.acidity) && (
+            <div style={{ background: "rgba(255,255,255,0.03)", borderRadius: 12, padding: "16px", marginBottom: 16, display: "flex", justifyContent: "center" }}>
+              <TasteMap info={i} />
+            </div>
+          )}
+
+          {i.temps && i.temps.length > 0 && (
+            <div style={{ marginBottom: 18 }}>
+              <div style={{ fontSize: 11, color: "#888", marginBottom: 10 }}>🌡️ 適飲溫度{i.best_temp ? `（推薦 ${i.best_temp}）` : ""}</div>
+              {isSake ? <TempScale temps={i.temps} best={i.best_temp} /> : (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                  {i.temps.map((t, x) => <span key={x} style={{ fontSize: 12, background: "rgba(91,168,211,0.15)", color: "#7bb8d3", padding: "4px 11px", borderRadius: 99, border: "1px solid rgba(91,168,211,0.3)" }}>{t}</span>)}
+                </div>
+              )}
+            </div>
+          )}
+
+          {rows.length > 0 && (
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 16 }}>
+              {rows.map(([k, v]) => (
+                <div key={k} style={{ background: "rgba(255,255,255,0.04)", borderRadius: 10, padding: "10px 12px" }}>
+                  <div style={{ fontSize: 10, color: "#665a44", marginBottom: 3 }}>{k}</div>
+                  <div className="mincho" style={{ fontSize: 14, color: "var(--ink)", fontWeight: 600 }}>{v}</div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {i.vessel && (
+            <div style={{ display: "flex", gap: 10, alignItems: "center", padding: "11px 14px", background: "rgba(255,255,255,0.03)", borderRadius: 10, marginBottom: 12 }}>
+              <span style={{ fontSize: 18 }}>🥂</span>
+              <div>
+                <div style={{ fontSize: 10, color: "#665a44" }}>建議酒器</div>
+                <div style={{ fontSize: 13, color: "var(--ink)" }}>{i.vessel}</div>
+              </div>
+            </div>
+          )}
+
+          {i.food_pairing && (
+            <div style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: "11px 14px", background: "rgba(255,255,255,0.03)", borderRadius: 10, marginBottom: 18 }}>
+              <span style={{ fontSize: 18 }}>🍽️</span>
+              <div>
+                <div style={{ fontSize: 10, color: "#665a44", marginBottom: 2 }}>搭配建議</div>
+                <div style={{ fontSize: 13, color: "var(--ink)", lineHeight: 1.6 }}>{i.food_pairing}</div>
+              </div>
+            </div>
+          )}
+
+          <div style={{ fontSize: 11, color: "#4a4236" }}>記錄於 {new Date(sake.addedAt).toLocaleDateString("zh-TW")}</div>
         </div>
       </div>
     </div>

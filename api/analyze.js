@@ -81,13 +81,31 @@ export default async function handler(req, res) {
   if (!apiKey) return res.status(500).json({ error: "ANTHROPIC_API_KEY not configured" });
 
   try {
-    const { image, mimeType = "image/jpeg", nameHint } = req.body;
+    const { image, mimeType = "image/jpeg", nameHint, backImage, backMimeType = "image/jpeg" } = req.body;
     if (!image) return res.status(400).json({ error: "No image provided" });
 
-    // 使用者修正酒名後重新辨識：把正確酒名當作強提示
-    const promptText = nameHint
-      ? `使用者已確認這支酒的正確名稱為「${nameHint}」。請以此名稱為準（酒標可能是書法體導致先前辨識錯誤），依你對這支酒的知識，重新提供完整正確的資訊。\n\n${SAKE_PROMPT}`
-      : SAKE_PROMPT;
+    // 組合 content：正面圖（必要）+ 背面圖（可選）+ 提示文字
+    const contentBlocks = [
+      { type: "image", source: { type: "base64", media_type: mimeType, data: image } },
+    ];
+
+    // 有背面圖時，加入背面圖並調整提示
+    if (backImage) {
+      contentBlocks.push({ type: "image", source: { type: "base64", media_type: backMimeType, data: backImage } });
+    }
+
+    let promptText;
+    if (nameHint && backImage) {
+      promptText = `使用者已確認這支酒的正確名稱為「${nameHint}」。第一張圖是正面酒標，第二張圖是背面酒標，請同時參考兩張圖和酒名來提供最完整準確的資訊。\n\n${SAKE_PROMPT}`;
+    } else if (nameHint) {
+      promptText = `使用者已確認這支酒的正確名稱為「${nameHint}」。請以此名稱為準（酒標可能是書法體導致先前辨識錯誤），依你對這支酒的知識，重新提供完整正確的資訊。\n\n${SAKE_PROMPT}`;
+    } else if (backImage) {
+      promptText = `第一張圖是正面酒標，第二張圖是背面酒標，請同時參考兩張圖來提供最完整準確的資訊（背面通常含有更詳細的原料、製法說明）。\n\n${SAKE_PROMPT}`;
+    } else {
+      promptText = SAKE_PROMPT;
+    }
+
+    contentBlocks.push({ type: "text", text: promptText });
 
     const r = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -99,13 +117,7 @@ export default async function handler(req, res) {
       body: JSON.stringify({
         model: "claude-sonnet-4-6",
         max_tokens: 2000,
-        messages: [{
-          role: "user",
-          content: [
-            { type: "image", source: { type: "base64", media_type: mimeType, data: image } },
-            { type: "text", text: promptText },
-          ],
-        }],
+        messages: [{ role: "user", content: contentBlocks }],
       }),
     });
 
@@ -114,14 +126,12 @@ export default async function handler(req, res) {
 
     const text = data.content?.map(i => i.text || "").join("") || "{}";
 
-    // 穩健擷取 JSON：先去 markdown 圍欄，再抓第一個 { 到最後一個 }
     let info = null;
     const tryParse = (s) => { try { return JSON.parse(s); } catch { return null; } };
 
     let clean = text.replace(/```json/gi, "").replace(/```/g, "").trim();
     info = tryParse(clean);
 
-    // 如果直接解析失敗，從文字中擷取最外層的 JSON 物件
     if (!info) {
       const first = clean.indexOf("{");
       const last = clean.lastIndexOf("}");
@@ -130,19 +140,15 @@ export default async function handler(req, res) {
       }
     }
 
-    // 仍失敗 → 嘗試修補被截斷的 JSON（補上缺少的引號與括號）
     if (!info) {
       const first = clean.indexOf("{");
       if (first !== -1) {
         let frag = clean.slice(first);
-        // 移除最後一個不完整的鍵值對（截斷處）
         frag = frag.replace(/,\s*"[^"]*"\s*:\s*"[^"]*$/, "");
         frag = frag.replace(/,\s*"[^"]*"\s*:\s*$/, "");
         frag = frag.replace(/,\s*"[^"]*$/, "");
-        // 補齊未閉合的引號
         const quotes = (frag.match(/"/g) || []).length;
         if (quotes % 2 !== 0) frag += '"';
-        // 補齊括號
         const openBrace = (frag.match(/{/g) || []).length;
         const closeBrace = (frag.match(/}/g) || []).length;
         const openBracket = (frag.match(/\[/g) || []).length;
@@ -153,7 +159,6 @@ export default async function handler(req, res) {
       }
     }
 
-    // 回傳結果；若仍解析不出，附上 raw 方便診斷
     if (!info) return res.status(200).json({ info: null, raw: text.slice(0, 500) });
 
     return res.status(200).json({ info });
