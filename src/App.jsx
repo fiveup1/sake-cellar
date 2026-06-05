@@ -371,11 +371,8 @@ function AppInner() {
             {tab === "collage" && (
               <CollageView sakes={sakes} selected={selected} setSelected={setSelected} setSelectMode={setSelectMode} goCellar={() => setTab("cellar")} />
             )}
-            {tab === "backup" && (
-              <BackupView sakes={sakes} />
-            )}
-            {tab === "share" && (
-              <ShareView sakes={sakes} />
+            {tab === "manage" && (
+              <ManageView sakes={sakes} />
             )}
           </>
         )}
@@ -387,8 +384,7 @@ function AppInner() {
           { k: "cellar", icon: "蔵", label: "酒窖" },
           { k: "import", icon: "入", label: "匯入" },
           { k: "collage", icon: "繪", label: "拼接" },
-          { k: "backup", icon: "備", label: "備份" },
-          { k: "share", icon: "享", label: "分享" },
+          { k: "manage", icon: "管", label: "管理" },
         ].map(t => (
           <button key={t.k} onClick={() => setTab(t.k)} style={{
             flex: 1, padding: "11px 4px 9px", background: "none", border: "none",
@@ -831,6 +827,28 @@ function StickmanLoading() {
 }
 
 // ═══════════════════════════ 備份 ═══════════════════════════
+// ═══════════════════════════ 管理（備份＋分享合一） ═══════════════════════════
+function ManageView({ sakes }) {
+  const [section, setSection] = useState("backup"); // "backup" | "share"
+  const gold = "#c9922a";
+  return (
+    <div className="fade-in">
+      <div className="mincho" style={{ fontSize: 20, color: gold, marginBottom: 16 }}>管理</div>
+      {/* 切換列 */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 22, background: "rgba(255,255,255,0.04)", borderRadius: 12, padding: 5 }}>
+        {[{ k: "backup", label: "⬇ 備份資料" }, { k: "share", label: "🔗 分享酒窖" }].map(o => (
+          <button key={o.k} onClick={() => setSection(o.k)} style={{
+            flex: 1, padding: "10px", borderRadius: 9, fontSize: 13, fontWeight: section === o.k ? 700 : 400,
+            background: section === o.k ? `linear-gradient(135deg,${gold},#e8b84b)` : "transparent",
+            border: "none", color: section === o.k ? "#0e0a06" : "#888", transition: "all .18s",
+          }}>{o.label}</button>
+        ))}
+      </div>
+      {section === "backup" ? <BackupView sakes={sakes} /> : <ShareView sakes={sakes} />}
+    </div>
+  );
+}
+
 function BackupView({ sakes }) {
   const [exporting, setExporting] = useState(false);
   const [done, setDone] = useState(false);
@@ -920,11 +938,8 @@ function BackupView({ sakes }) {
   const successCount = sakes.filter(s => s.status === "done" && s.info).length;
 
   return (
-    <div className="fade-in">
-      <div style={{ marginBottom: 22 }}>
-        <div className="mincho" style={{ fontSize: 20, color: gold, marginBottom: 6 }}>備份資料</div>
-        <div style={{ fontSize: 12, color: "#777", lineHeight: 1.6 }}>將所有酒窖資料打包成 ZIP，可還原至任何裝置或新版本</div>
-      </div>
+    <div>
+      <div style={{ fontSize: 12, color: "#777", lineHeight: 1.6, marginBottom: 18 }}>將所有酒窖資料打包成 ZIP，可還原至任何裝置或新版本</div>
 
       {/* 統計 */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 22 }}>
@@ -1375,8 +1390,7 @@ function ShareView({ sakes }) {
 
   if (!hasSupabase) {
     return (
-      <div className="fade-in" style={{ padding: "20px 0" }}>
-        <div className="mincho" style={{ fontSize: 20, color: gold, marginBottom: 10 }}>分享酒窖</div>
+      <div style={{ padding: "4px 0" }}>
         <div style={{ background: "rgba(255,255,255,0.04)", border: "1px solid var(--line)", borderRadius: 13, padding: 20, color: "#888", fontSize: 13, lineHeight: 1.7 }}>
           分享功能需要 Supabase 資料庫支援。<br />請先在 .env 設定 VITE_SUPABASE_URL 和 VITE_SUPABASE_ANON_KEY。
         </div>
@@ -1385,11 +1399,8 @@ function ShareView({ sakes }) {
   }
 
   return (
-    <div className="fade-in">
-      <div style={{ marginBottom: 22 }}>
-        <div className="mincho" style={{ fontSize: 20, color: gold, marginBottom: 6 }}>分享酒窖</div>
-        <div style={{ fontSize: 12, color: "#777", lineHeight: 1.6 }}>產生唯讀連結，朋友可瀏覽、搜尋你的酒窖，但無法修改或刪除</div>
-      </div>
+    <div>
+      <div style={{ fontSize: 12, color: "#777", lineHeight: 1.6, marginBottom: 18 }}>產生唯讀連結，朋友可瀏覽、搜尋你的酒窖，但無法修改或刪除</div>
 
       {/* 功能說明 */}
       <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid var(--line)", borderRadius: 13, padding: "16px", marginBottom: 20 }}>
