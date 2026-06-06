@@ -521,6 +521,17 @@ function CellarView(props) {
         </div>
       )}
 
+      {/* 計數列 */}
+      {sakes.length > 0 && (
+        <div style={{ fontSize: 11, color: "#4a4236", marginBottom: 12 }}>
+          {(filterCat !== "全部" || search) ? (
+            <>{filtered.length} 支{filterCat !== "全部" ? ` ${filterCat}` : ""}{search ? ` · 搜尋「${search}」` : ""} <span style={{ color: "#3a3228" }}>（共 {sakes.length} 支）</span></>
+          ) : (
+            <>共 {sakes.length} 支酒</>
+          )}
+        </div>
+      )}
+
       {/* 空狀態 */}
       {filtered.length === 0 ? (
         <div style={{ textAlign: "center", padding: "70px 20px", color: "#4a4236" }}>
@@ -586,7 +597,7 @@ function SakeCard({ sake, selected, selectMode, onSelect, onOpen, onLongPress })
       )}
 
       <div style={{ aspectRatio: "3/4", overflow: "hidden", background: "#0a0704", position: "relative" }}>
-        {sake.imageUrl && <img src={sake.imageUrl} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
+        {sake.imageUrl && <img src={sake.imageUrl} alt="" loading="lazy" decoding="async" style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
         {sake.status === "analyzing" && (
           <div style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.65)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8 }}>
             <div style={{ width: 26, height: 26, border: `2.5px solid ${gold}44`, borderTop: `2.5px solid ${gold}`, borderRadius: "50%", animation: "spin 1s linear infinite" }} />
@@ -764,54 +775,67 @@ function CollageView({ sakes, selected, setSelected, setSelectMode, goCellar }) 
 }
 
 // ═══════════════════════════ 載入動畫 ═══════════════════════════
-function StickmanLoading() {
+function StickmanLoading({ label = "今天又開哪支酒 ?" }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", minHeight: "60vh", gap: 30 }}>
-      <svg width="300" height="260" viewBox="0 0 300 260" style={{ overflow: "visible" }}>
+      <svg width="240" height="230" viewBox="0 0 240 230" style={{ overflow: "visible" }}>
         <style>{`
-          /* 瓶子直立畫，繞瓶口(150,70)旋轉：微斜 → 打橫倒向左邊杯子，5 秒完成 */
-          @keyframes tilt {
-            0%        { transform: rotate(-12deg); }
-            80%, 100% { transform: rotate(-105deg); }
+          @keyframes sakeTilt {
+            0%        { transform: rotate(-10deg); }
+            75%, 100% { transform: rotate(-108deg); }
           }
-          /* 酒流：傾斜到一定角度後出現 */
-          @keyframes streamShow {
-            0%, 24%   { opacity: 0; }
-            40%, 100% { opacity: 1; }
+          @keyframes sakeStream {
+            0%, 28%   { opacity: 0; }
+            44%, 100% { opacity: 1; }
           }
-          /* 杯中酒位：5 秒內由空到滿 */
-          @keyframes cupFill {
-            0%, 20%   { transform: scaleY(0); }
-            92%, 100% { transform: scaleY(1); }
+          @keyframes sakeFill {
+            0%, 24%   { transform: scaleY(0); }
+            90%, 100% { transform: scaleY(1); }
           }
-          .bottle { transform-origin: 150px 70px; animation: tilt 5s cubic-bezier(0.45,0.05,0.55,0.95) forwards; }
-          .stream { animation: streamShow 5s ease-in forwards; }
-          .cup-fill { transform-origin: center bottom; animation: cupFill 5s cubic-bezier(0.4,0.1,0.6,0.95) forwards; }
+          .sake-bottle { transform-origin: 148px 58px; animation: sakeTilt 5s cubic-bezier(0.45,0.05,0.55,0.95) forwards; }
+          .sake-stream { animation: sakeStream 5s ease-in forwards; }
+          .sake-fill   { transform-origin: center bottom; animation: sakeFill 5s cubic-bezier(0.4,0.1,0.6,0.95) forwards; }
         `}</style>
 
-        {/* ── 豬口杯（黃色線條，左下） ── */}
-        <clipPath id="cupClipInner">
-          <path d="M58 168 L122 168 L114 226 Q90 238 66 226 Z"/>
+        {/*
+          ── 猪口杯（富士山倒型：上寬下窄，杯身有弧度）──
+          杯口 x:54~126 y:148；杯底 x:74~106 y:210
+        */}
+        <clipPath id="sakeCupClip">
+          <path d="M57 150 Q90 144 123 150 Q118 178 109 198 Q100 212 90 214 Q80 212 71 198 Q62 178 57 150 Z"/>
         </clipPath>
-        <g clipPath="url(#cupClipInner)">
-          <rect className="cup-fill" x="56" y="168" width="68" height="72" fill="#e8b84b"/>
+        <g clipPath="url(#sakeCupClip)">
+          <rect className="sake-fill" x="54" y="148" width="72" height="68" fill="#e8b84b" opacity="0.85"/>
         </g>
-        <path d="M56 166 L124 166 L115 227 Q90 240 65 227 Z" fill="none" stroke="#c9922a" strokeWidth="3" strokeLinejoin="round"/>
-        <ellipse cx="90" cy="166" rx="34" ry="7" fill="none" stroke="#c9922a" strokeWidth="3"/>
+        {/* 杯身輪廓（無杯口橢圓橫線）*/}
+        <path d="M55 149 Q90 143 125 149 Q120 177 111 198 Q101 213 90 216 Q79 213 69 198 Q60 177 55 149 Z"
+              fill="none" stroke="#c9922a" strokeWidth="2.8" strokeLinejoin="round"/>
 
-        {/* ── 酒流（瓶口 → 杯，滿黃色） ── */}
-        <path className="stream" d="M150 78 Q120 120 90 158" fill="none" stroke="#e8b84b" strokeWidth="5" strokeLinecap="round"/>
-
-        {/* ── 酒瓶上半部（黃色線條，繞瓶口傾倒） ── */}
-        <g className="bottle">
-          <path d="M138 160 L138 104 Q138 86 144 80 L144 60 Q144 56 147 56 L153 56 Q156 56 156 60 L156 80 Q162 86 162 104 L162 160"
-                fill="none" stroke="#c9922a" strokeWidth="3" strokeLinejoin="round" strokeLinecap="round"/>
-          <line x1="144" y1="68" x2="156" y2="68" stroke="#c9922a" strokeWidth="2.5"/>
+        {/* 酒瓶（靠近杯子，放大）*/}
+        <g className="sake-bottle">
+          {/* 瓶口 */}
+          <rect x="141" y="46" width="14" height="14" rx="3" fill="none" stroke="#c9922a" strokeWidth="2.8"/>
+          {/* 瓶頸 */}
+          <path d="M143 60 L143 74 Q143 70 148 70 Q153 70 153 74 L153 60"
+                fill="none" stroke="#c9922a" strokeWidth="2.8" strokeLinecap="round" strokeLinejoin="round"/>
+          {/* 瓶肩到瓶身 */}
+          <path d="M143 74 Q138 86 136 104 L136 176 Q136 184 148 184 Q160 184 160 176 L160 104 Q158 86 153 74"
+                fill="none" stroke="#c9922a" strokeWidth="2.8" strokeLinecap="round" strokeLinejoin="round"/>
+          {/* 瓶底 */}
+          <line x1="136" y1="176" x2="160" y2="176" stroke="#c9922a" strokeWidth="2.8" strokeLinecap="round"/>
+          {/* 酒標裝飾 */}
+          <line x1="138" y1="122" x2="158" y2="122" stroke="#c9922a" strokeWidth="1.6" strokeLinecap="round" opacity="0.55"/>
+          <line x1="138" y1="131" x2="158" y2="131" stroke="#c9922a" strokeWidth="1.6" strokeLinecap="round" opacity="0.55"/>
         </g>
+
+        {/* 酒流（弧線，無直線感，瓶口→杯中）*/}
+        <path className="sake-stream"
+              d="M143 66 Q116 100 96 138"
+              fill="none" stroke="#e8b84b" strokeWidth="4" strokeLinecap="round" opacity="0.9"/>
       </svg>
 
       <div style={{ textAlign: "center" }}>
-        <div className="mincho" style={{ fontSize: 19, color: "#e8b84b", letterSpacing: 2, fontWeight: 700 }}>今天又開哪支酒 ?</div>
+        <div className="mincho" style={{ fontSize: 19, color: "#e8b84b", letterSpacing: 2, fontWeight: 700 }}>{label}</div>
         <div style={{ display: "flex", justifyContent: "center", gap: 5, marginTop: 12 }}>
           {[0, 1, 2].map(i => (
             <div key={i} style={{
@@ -1552,7 +1576,7 @@ function SharedCellar({ token }) {
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <div>
             <div className="mincho" style={{ fontSize: 26, fontWeight: 800, color: gold, letterSpacing: 4, lineHeight: 1 }}>酒蔵録</div>
-            <div style={{ fontSize: 10, color: "#6a5d45", letterSpacing: 3, marginTop: 5 }}>SAKE CELLAR · 共享酒窖</div>
+            <div style={{ fontSize: 10, color: "#6a5d45", letterSpacing: 3, marginTop: 5 }}>SAKE CELLAR · {loading ? "共享酒窖" : `蔵 ${sakes.length} 本`}</div>
           </div>
           <div style={{ fontSize: 10, background: "rgba(201,146,42,0.12)", color: "#bba080", border: "1px solid rgba(201,146,42,0.25)", borderRadius: 8, padding: "4px 10px" }}>
             👁 唯讀模式
@@ -1562,12 +1586,7 @@ function SharedCellar({ token }) {
 
       <main className="no-scrollbar" style={{ flex: 1, overflowY: "auto", padding: "4px 16px", paddingBottom: "calc(32px + env(safe-area-inset-bottom))" }}>
         {loading ? (
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "50vh" }}>
-            <div style={{ textAlign: "center" }}>
-              <div style={{ width: 36, height: 36, border: `3px solid ${gold}33`, borderTop: `3px solid ${gold}`, borderRadius: "50%", animation: "spin 1s linear infinite", margin: "0 auto 14px" }} />
-              <div style={{ fontSize: 13, color: gold }}>載入酒窖中…</div>
-            </div>
-          </div>
+          <StickmanLoading label="載入共享酒窖中…" />
         ) : (
           <div className="fade-in">
             {/* 搜尋列 */}
@@ -1600,11 +1619,12 @@ function SharedCellar({ token }) {
               </div>
             )}
 
-            {/* 計數 */}
-            <div style={{ fontSize: 11, color: "#4a4236", marginBottom: 12 }}>
-              {filtered.length} 支{filterCat !== "全部" ? ` ${filterCat}` : ""}
-              {search ? ` · 搜尋「${search}」` : ""}
-            </div>
+            {/* 計數（篩選/搜尋時才顯示，總數已在 header 顯示） */}
+            {(filterCat !== "全部" || search) && (
+              <div style={{ fontSize: 11, color: "#4a4236", marginBottom: 12 }}>
+                {filtered.length} 支{filterCat !== "全部" ? ` ${filterCat}` : ""}{search ? ` · 搜尋「${search}」` : ""}
+              </div>
+            )}
 
             {/* 酒格列表 */}
             {filtered.length === 0 ? (
