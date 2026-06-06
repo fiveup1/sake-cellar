@@ -777,61 +777,130 @@ function CollageView({ sakes, selected, setSelected, setSelectMode, goCellar }) 
 // ═══════════════════════════ 載入動畫 ═══════════════════════════
 function StickmanLoading({ label = "今天又開哪支酒 ?" }) {
   return (
-    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", minHeight: "60vh", gap: 30 }}>
-      <svg width="240" height="230" viewBox="0 0 240 230" style={{ overflow: "visible" }}>
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", minHeight: "60vh", gap: 24 }}>
+      <svg width="320" height="200" viewBox="0 0 680 300" style={{ overflow: "hidden", width: "100%", maxWidth: 360 }}>
+        <defs><clipPath id="splashClip"><rect x="0" y="0" width="680" height="260"/></clipPath></defs>
         <style>{`
-          @keyframes sakeTilt {
-            0%        { transform: rotate(-10deg); }
-            75%, 100% { transform: rotate(-108deg); }
-          }
-          @keyframes sakeStream {
-            0%, 28%   { opacity: 0; }
-            44%, 100% { opacity: 1; }
-          }
-          @keyframes sakeFill {
-            0%, 24%   { transform: scaleY(0); }
-            90%, 100% { transform: scaleY(1); }
-          }
-          .sake-bottle { transform-origin: 148px 58px; animation: sakeTilt 5s cubic-bezier(0.45,0.05,0.55,0.95) forwards; }
-          .sake-stream { animation: sakeStream 5s ease-in forwards; }
-          .sake-fill   { transform-origin: center bottom; animation: sakeFill 5s cubic-bezier(0.4,0.1,0.6,0.95) forwards; }
+          @keyframes splashParade { 0%{transform:translateX(-50%)} 100%{transform:translateX(0%)} }
+          .splash-trk { animation: splashParade 16s linear infinite; }
         `}</style>
-
-        {/*
-          ── 猪口杯（富士山倒型：上寬下窄，杯身有弧度）──
-          杯口 x:54~126 y:148；杯底 x:74~106 y:210
-        */}
-        <clipPath id="sakeCupClip">
-          <path d="M57 150 Q90 144 123 150 Q118 178 109 198 Q100 212 90 214 Q80 212 71 198 Q62 178 57 150 Z"/>
-        </clipPath>
-        <g clipPath="url(#sakeCupClip)">
-          <rect className="sake-fill" x="54" y="148" width="72" height="68" fill="#e8b84b" opacity="0.85"/>
+        <g clipPath="url(#splashClip)">
+        <g className="splash-trk">
+          {/* B1 十四代 */}
+          <g transform="translate(5,10)">
+            <rect x="28" y="0" width="14" height="16" rx="2.5" fill="none" stroke="#c9922a" strokeWidth="2.2"/>
+            <rect x="29" y="16" width="12" height="58" rx="1" fill="none" stroke="#c9922a" strokeWidth="2.2"/>
+            <path d="M29 74 Q16 86 13 98" fill="none" stroke="#c9922a" strokeWidth="2.2" strokeLinecap="round"/>
+            <path d="M41 74 Q54 86 57 98" fill="none" stroke="#c9922a" strokeWidth="2.2" strokeLinecap="round"/>
+            <rect x="13" y="98" width="44" height="132" rx="2" fill="none" stroke="#c9922a" strokeWidth="2.2"/>
+            <line x1="13" y1="230" x2="57" y2="230" stroke="#c9922a" strokeWidth="2.2" strokeLinecap="round"/>
+            <rect x="15" y="148" width="40" height="64" rx="1" fill="none" stroke="#c9922a" strokeWidth="1.5" opacity="0.7"/>
+            <text x="35" y="199" textAnchor="middle" fontSize="11" fill="#c9922a" fontFamily="serif" writingMode="tb" letterSpacing="1">十四代</text>
+          </g>
+          {/* B2 新政 diagonal */}
+          <g transform="translate(135,10)">
+            <rect x="28" y="0" width="14" height="14" rx="2.5" fill="none" stroke="#c9922a" strokeWidth="2.2"/>
+            <rect x="29" y="14" width="12" height="62" rx="1" fill="none" stroke="#c9922a" strokeWidth="2.2"/>
+            <path d="M29 76 Q15 88 12 100" fill="none" stroke="#c9922a" strokeWidth="2.2" strokeLinecap="round"/>
+            <path d="M41 76 Q55 88 58 100" fill="none" stroke="#c9922a" strokeWidth="2.2" strokeLinecap="round"/>
+            <rect x="12" y="100" width="46" height="130" rx="2" fill="none" stroke="#c9922a" strokeWidth="2.2"/>
+            <line x1="12" y1="230" x2="58" y2="230" stroke="#c9922a" strokeWidth="2.2" strokeLinecap="round"/>
+            <path d="M13 148 L57 126 L57 186 L13 208 Z" fill="none" stroke="#c9922a" strokeWidth="1.5" opacity="0.7"/>
+            <text transform="translate(35,168) rotate(-24)" textAnchor="middle" fontSize="11" fill="#c9922a" fontFamily="serif" letterSpacing="1">新政</text>
+          </g>
+          {/* B3 信州亀齢 wide cap */}
+          <g transform="translate(265,10)">
+            <rect x="25" y="0" width="20" height="16" rx="3" fill="none" stroke="#c9922a" strokeWidth="2.2"/>
+            <rect x="29" y="16" width="12" height="56" rx="1" fill="none" stroke="#c9922a" strokeWidth="2.2"/>
+            <path d="M29 72 Q16 84 13 96" fill="none" stroke="#c9922a" strokeWidth="2.2" strokeLinecap="round"/>
+            <path d="M41 72 Q54 84 57 96" fill="none" stroke="#c9922a" strokeWidth="2.2" strokeLinecap="round"/>
+            <rect x="13" y="96" width="44" height="134" rx="2" fill="none" stroke="#c9922a" strokeWidth="2.2"/>
+            <line x1="13" y1="230" x2="57" y2="230" stroke="#c9922a" strokeWidth="2.2" strokeLinecap="round"/>
+            <rect x="15" y="144" width="40" height="68" rx="1" fill="none" stroke="#c9922a" strokeWidth="1.5" opacity="0.7"/>
+            <line x1="15" y1="158" x2="55" y2="158" stroke="#c9922a" strokeWidth="1" opacity="0.4"/>
+            <text x="35" y="202" textAnchor="middle" fontSize="9.5" fill="#c9922a" fontFamily="serif" writingMode="tb" letterSpacing="0.5">信州亀齢</text>
+          </g>
+          {/* B4 金雀 diagonal */}
+          <g transform="translate(395,10)">
+            <rect x="28" y="0" width="14" height="18" rx="2.5" fill="none" stroke="#c9922a" strokeWidth="2.2"/>
+            <rect x="29" y="18" width="12" height="64" rx="1" fill="none" stroke="#c9922a" strokeWidth="2.2"/>
+            <path d="M29 82 Q15 93 12 104" fill="none" stroke="#c9922a" strokeWidth="2.2" strokeLinecap="round"/>
+            <path d="M41 82 Q55 93 58 104" fill="none" stroke="#c9922a" strokeWidth="2.2" strokeLinecap="round"/>
+            <rect x="12" y="104" width="46" height="126" rx="2" fill="none" stroke="#c9922a" strokeWidth="2.2"/>
+            <line x1="12" y1="230" x2="58" y2="230" stroke="#c9922a" strokeWidth="2.2" strokeLinecap="round"/>
+            <path d="M13 150 L57 128 L57 182 L13 204 Z" fill="none" stroke="#c9922a" strokeWidth="1.5" opacity="0.7"/>
+            <text transform="translate(35,167) rotate(-24)" textAnchor="middle" fontSize="11" fill="#c9922a" fontFamily="serif" letterSpacing="1">金雀</text>
+          </g>
+          {/* B5 而今 round cap */}
+          <g transform="translate(525,10)">
+            <rect x="26" y="0" width="18" height="22" rx="4" fill="none" stroke="#c9922a" strokeWidth="2.2"/>
+            <rect x="29" y="22" width="12" height="54" rx="1" fill="none" stroke="#c9922a" strokeWidth="2.2"/>
+            <path d="M29 76 Q15 87 12 98" fill="none" stroke="#c9922a" strokeWidth="2.2" strokeLinecap="round"/>
+            <path d="M41 76 Q55 87 58 98" fill="none" stroke="#c9922a" strokeWidth="2.2" strokeLinecap="round"/>
+            <rect x="12" y="98" width="46" height="132" rx="2" fill="none" stroke="#c9922a" strokeWidth="2.2"/>
+            <line x1="12" y1="230" x2="58" y2="230" stroke="#c9922a" strokeWidth="2.2" strokeLinecap="round"/>
+            <rect x="14" y="148" width="42" height="64" rx="1" fill="none" stroke="#c9922a" strokeWidth="1.5" opacity="0.7"/>
+            <text x="35" y="198" textAnchor="middle" fontSize="11" fill="#c9922a" fontFamily="serif" writingMode="tb" letterSpacing="1">而今</text>
+          </g>
+          {/* B6 產土 */}
+          <g transform="translate(655,10)">
+            <rect x="28" y="0" width="14" height="16" rx="2.5" fill="none" stroke="#c9922a" strokeWidth="2.2"/>
+            <rect x="29" y="16" width="12" height="58" rx="1" fill="none" stroke="#c9922a" strokeWidth="2.2"/>
+            <path d="M29 74 Q16 86 13 98" fill="none" stroke="#c9922a" strokeWidth="2.2" strokeLinecap="round"/>
+            <path d="M41 74 Q54 86 57 98" fill="none" stroke="#c9922a" strokeWidth="2.2" strokeLinecap="round"/>
+            <rect x="13" y="98" width="44" height="132" rx="2" fill="none" stroke="#c9922a" strokeWidth="2.2"/>
+            <line x1="13" y1="230" x2="57" y2="230" stroke="#c9922a" strokeWidth="2.2" strokeLinecap="round"/>
+            <rect x="15" y="148" width="40" height="64" rx="1" fill="none" stroke="#c9922a" strokeWidth="1.5" opacity="0.7"/>
+            <text x="35" y="198" textAnchor="middle" fontSize="11" fill="#c9922a" fontFamily="serif" writingMode="tb" letterSpacing="1">產土</text>
+          </g>
+          {/* B7 寒菊銘醸宮寒梅 diagonal */}
+          <g transform="translate(785,10)">
+            <rect x="28" y="0" width="14" height="14" rx="2.5" fill="none" stroke="#c9922a" strokeWidth="2.2"/>
+            <rect x="29" y="14" width="12" height="62" rx="1" fill="none" stroke="#c9922a" strokeWidth="2.2"/>
+            <path d="M29 76 Q15 88 12 100" fill="none" stroke="#c9922a" strokeWidth="2.2" strokeLinecap="round"/>
+            <path d="M41 76 Q55 88 58 100" fill="none" stroke="#c9922a" strokeWidth="2.2" strokeLinecap="round"/>
+            <rect x="12" y="100" width="46" height="130" rx="2" fill="none" stroke="#c9922a" strokeWidth="2.2"/>
+            <line x1="12" y1="230" x2="58" y2="230" stroke="#c9922a" strokeWidth="2.2" strokeLinecap="round"/>
+            <path d="M13 140 L57 118 L57 196 L13 218 Z" fill="none" stroke="#c9922a" strokeWidth="1.5" opacity="0.7"/>
+            <text transform="translate(35,162) rotate(-24)" textAnchor="middle" fontSize="8" fill="#c9922a" fontFamily="serif" letterSpacing="0.5">寒菊銘醸</text>
+            <text transform="translate(35,174) rotate(-24)" textAnchor="middle" fontSize="8" fill="#c9922a" fontFamily="serif" letterSpacing="0.5">宮寒梅</text>
+          </g>
+          {/* B8 花陽浴 wide cap */}
+          <g transform="translate(915,10)">
+            <rect x="25" y="0" width="20" height="16" rx="3" fill="none" stroke="#c9922a" strokeWidth="2.2"/>
+            <rect x="29" y="16" width="12" height="56" rx="1" fill="none" stroke="#c9922a" strokeWidth="2.2"/>
+            <path d="M29 72 Q16 84 13 96" fill="none" stroke="#c9922a" strokeWidth="2.2" strokeLinecap="round"/>
+            <path d="M41 72 Q54 84 57 96" fill="none" stroke="#c9922a" strokeWidth="2.2" strokeLinecap="round"/>
+            <rect x="13" y="96" width="44" height="134" rx="2" fill="none" stroke="#c9922a" strokeWidth="2.2"/>
+            <line x1="13" y1="230" x2="57" y2="230" stroke="#c9922a" strokeWidth="2.2" strokeLinecap="round"/>
+            <rect x="15" y="144" width="40" height="68" rx="1" fill="none" stroke="#c9922a" strokeWidth="1.5" opacity="0.7"/>
+            <line x1="15" y1="158" x2="55" y2="158" stroke="#c9922a" strokeWidth="1" opacity="0.4"/>
+            <text x="35" y="202" textAnchor="middle" fontSize="9.5" fill="#c9922a" fontFamily="serif" writingMode="tb" letterSpacing="0.5">花陽浴</text>
+          </g>
+          {/* B9 花邑 tall neck */}
+          <g transform="translate(1045,10)">
+            <rect x="28" y="0" width="14" height="18" rx="2.5" fill="none" stroke="#c9922a" strokeWidth="2.2"/>
+            <rect x="29" y="18" width="12" height="64" rx="1" fill="none" stroke="#c9922a" strokeWidth="2.2"/>
+            <path d="M29 82 Q15 93 12 104" fill="none" stroke="#c9922a" strokeWidth="2.2" strokeLinecap="round"/>
+            <path d="M41 82 Q55 93 58 104" fill="none" stroke="#c9922a" strokeWidth="2.2" strokeLinecap="round"/>
+            <rect x="12" y="104" width="46" height="126" rx="2" fill="none" stroke="#c9922a" strokeWidth="2.2"/>
+            <line x1="12" y1="230" x2="58" y2="230" stroke="#c9922a" strokeWidth="2.2" strokeLinecap="round"/>
+            <rect x="14" y="148" width="40" height="64" rx="1" fill="none" stroke="#c9922a" strokeWidth="1.5" opacity="0.7"/>
+            <text x="34" y="198" textAnchor="middle" fontSize="11" fill="#c9922a" fontFamily="serif" writingMode="tb" letterSpacing="1">花邑</text>
+          </g>
+          {/* B10 十四代 repeat */}
+          <g transform="translate(1175,10)">
+            <rect x="26" y="0" width="18" height="22" rx="4" fill="none" stroke="#c9922a" strokeWidth="2.2"/>
+            <rect x="29" y="22" width="12" height="54" rx="1" fill="none" stroke="#c9922a" strokeWidth="2.2"/>
+            <path d="M29 76 Q15 87 12 98" fill="none" stroke="#c9922a" strokeWidth="2.2" strokeLinecap="round"/>
+            <path d="M41 76 Q55 87 58 98" fill="none" stroke="#c9922a" strokeWidth="2.2" strokeLinecap="round"/>
+            <rect x="12" y="98" width="46" height="132" rx="2" fill="none" stroke="#c9922a" strokeWidth="2.2"/>
+            <line x1="12" y1="230" x2="58" y2="230" stroke="#c9922a" strokeWidth="2.2" strokeLinecap="round"/>
+            <rect x="14" y="148" width="42" height="64" rx="1" fill="none" stroke="#c9922a" strokeWidth="1.5" opacity="0.7"/>
+            <text x="35" y="198" textAnchor="middle" fontSize="11" fill="#c9922a" fontFamily="serif" writingMode="tb" letterSpacing="1">十四代</text>
+          </g>
         </g>
-        {/* 杯身輪廓（無杯口橢圓橫線）*/}
-        <path d="M55 149 Q90 143 125 149 Q120 177 111 198 Q101 213 90 216 Q79 213 69 198 Q60 177 55 149 Z"
-              fill="none" stroke="#c9922a" strokeWidth="2.8" strokeLinejoin="round"/>
-
-        {/* 酒瓶（靠近杯子，放大）*/}
-        <g className="sake-bottle">
-          {/* 瓶口 */}
-          <rect x="141" y="46" width="14" height="14" rx="3" fill="none" stroke="#c9922a" strokeWidth="2.8"/>
-          {/* 瓶頸 */}
-          <path d="M143 60 L143 74 Q143 70 148 70 Q153 70 153 74 L153 60"
-                fill="none" stroke="#c9922a" strokeWidth="2.8" strokeLinecap="round" strokeLinejoin="round"/>
-          {/* 瓶肩到瓶身 */}
-          <path d="M143 74 Q138 86 136 104 L136 176 Q136 184 148 184 Q160 184 160 176 L160 104 Q158 86 153 74"
-                fill="none" stroke="#c9922a" strokeWidth="2.8" strokeLinecap="round" strokeLinejoin="round"/>
-          {/* 瓶底 */}
-          <line x1="136" y1="176" x2="160" y2="176" stroke="#c9922a" strokeWidth="2.8" strokeLinecap="round"/>
-          {/* 酒標裝飾 */}
-          <line x1="138" y1="122" x2="158" y2="122" stroke="#c9922a" strokeWidth="1.6" strokeLinecap="round" opacity="0.55"/>
-          <line x1="138" y1="131" x2="158" y2="131" stroke="#c9922a" strokeWidth="1.6" strokeLinecap="round" opacity="0.55"/>
         </g>
-
-        {/* 酒流（弧線，無直線感，瓶口→杯中）*/}
-        <path className="sake-stream"
-              d="M143 66 Q116 100 96 138"
-              fill="none" stroke="#e8b84b" strokeWidth="4" strokeLinecap="round" opacity="0.9"/>
       </svg>
 
       <div style={{ textAlign: "center" }}>
@@ -868,6 +937,26 @@ function ManageView({ sakes }) {
           }}>{o.label}</button>
         ))}
       </div>
+
+      {/* Saketime 排名連結 */}
+      <a href="https://www.saketime.jp/ranking/" target="_blank" rel="noopener noreferrer"
+        style={{ display: "flex", alignItems: "center", justifyContent: "space-between",
+          background: "rgba(201,146,42,0.08)", border: "1px solid rgba(201,146,42,0.3)",
+          borderRadius: 12, padding: "13px 16px", marginBottom: 20, textDecoration: "none",
+          color: gold, transition: "background .15s" }}
+        onMouseEnter={e => e.currentTarget.style.background = "rgba(201,146,42,0.15)"}
+        onMouseLeave={e => e.currentTarget.style.background = "rgba(201,146,42,0.08)"}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <span style={{ fontSize: 22 }}>🏆</span>
+          <div>
+            <div style={{ fontSize: 14, fontWeight: 700, letterSpacing: 1 }}>Saketime 排名</div>
+            <div style={{ fontSize: 11, color: "#8a7055", marginTop: 2 }}>saketime.jp · 日本酒人氣排行榜</div>
+          </div>
+        </div>
+        <span style={{ fontSize: 18, opacity: 0.6 }}>↗</span>
+      </a>
+
       {section === "backup" ? <BackupView sakes={sakes} /> : <ShareView sakes={sakes} />}
     </div>
   );
