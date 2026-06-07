@@ -668,6 +668,7 @@ const gold = "#c9922a";
 
 // ═══════════════════════════ 即時掃描比對 ═══════════════════════════
 function ScanView({ sakes }) {
+  const gold = "#c9922a";
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const streamRef = useRef(null);
@@ -884,6 +885,7 @@ function ScanView({ sakes }) {
 }
 
 function ImportView({ fileRef, onImport, importing, progress, cancelImport, sakes }) {
+  const gold = "#c9922a";
   const [subTab, setSubTab] = useState("import"); // "import" | "scan"
 
   return (
@@ -963,6 +965,7 @@ function chunkArray(arr, size) {
 }
 
 function CollageView({ sakes, selected, setSelected, setSelectMode, goCellar }) {
+  const gold = "#c9922a";
   const [layout, setLayout] = useState("tidy");
   const [mode, setMode] = useState("single"); // "single" | "multi"
   const [result, setResult] = useState(null);
@@ -1456,6 +1459,7 @@ function BackupView({ sakes }) {
 
 // ═══════════════════════════ 詳情 ═══════════════════════════
 function DetailSheet({ sake, onClose, onDelete, onReanalyze, onSaveBackImage }) {
+  const gold = "#c9922a";
   const i = sake.info || {};
   const isSake = i.category === "日本酒";
   const color = catColor(i.category);
