@@ -208,3 +208,15 @@ function patchToRow(p) {
   if ("info" in p) row.info = p.info;
   return row;
 }
+
+// ── 單支酒公開查詢（分享單瓶用）──
+export async function fetchSakeByIdPublic(id) {
+  if (!hasSupabase) return null;
+  const { data, error } = await supabase
+    .from("sakes")
+    .select("*")
+    .eq("id", id)
+    .single();
+  if (error || !data) return null;
+  return rowToSake(data);
+}
