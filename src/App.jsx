@@ -41,6 +41,16 @@ function AppInner() {
   const [bgLoading, setBgLoading] = useState(false); // 背景預載中
   const PAGE = 20;
   const abortImportRef = useRef(false);
+  const scrollRef = useRef(null);
+  const scrubRef = useRef(null);
+  const isDragging = useRef(false);
+  const onScrubMove = (clientY) => {
+    if (!scrollRef.current || !scrubRef.current) return;
+    const track = scrubRef.current.getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(1, (clientY - track.top) / track.height));
+    const el = scrollRef.current;
+    el.scrollTop = ratio * (el.scrollHeight - el.clientHeight);
+  };
   const importingRef = useRef(false);      // 匯入中時暫停背景預載
   const bgStopRef = useRef(false);         // 卸載時停止背景預載
   const fileRef = useRef();
@@ -442,17 +452,6 @@ function CellarView(props) {
     bgLoading, hasMore } = props;
   const gold = "#c9922a";
   const [showSort, setShowSort] = useState(false);
-  const scrollRef = useRef(null);
-  const scrubRef = useRef(null);
-  const isDragging = useRef(false);
-
-  const onScrubMove = (clientY) => {
-    if (!scrollRef.current || !scrubRef.current) return;
-    const track = scrubRef.current.getBoundingClientRect();
-    const ratio = Math.max(0, Math.min(1, (clientY - track.top) / track.height));
-    const el = scrollRef.current;
-    el.scrollTop = ratio * (el.scrollHeight - el.clientHeight);
-  };
   // 排序選項：依加入時間 / 依價格，各有升降序
   const sortOptions = [
     { k: "time-desc", label: "加入時間（新→舊）" },
