@@ -38,7 +38,7 @@ function drawCover(ctx, img, x, y, w, h) {
 export async function buildTidyCollage(imageUrls, opts = {}) {
   const pad = opts.pad ?? 28;
   const gap = opts.gap ?? 14;
-  const urls = imageUrls.slice(0, 36);
+  const urls = imageUrls.slice(0, 50);
   const { cols, rows } = bestGrid(urls.length);
 
   const canvas = document.createElement("canvas");
@@ -84,7 +84,7 @@ export async function buildTidyCollage(imageUrls, opts = {}) {
 
 // ── 散亂式：隨機旋轉、重疊、拍立得風 ──────────────────────────────
 export async function buildScatteredCollage(imageUrls, opts = {}) {
-  const urls = imageUrls.slice(0, 20);
+  const urls = imageUrls.slice(0, 50);
   const canvas = document.createElement("canvas");
   canvas.width = CANVAS_SIZE;
   canvas.height = CANVAS_SIZE;

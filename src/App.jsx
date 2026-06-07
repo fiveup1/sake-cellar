@@ -346,7 +346,8 @@ function AppInner() {
       </header>
 
       {/* ─── Body ─── */}
-      <main className="no-scrollbar" style={{ flex: 1, overflowY: "auto", padding: "4px 16px", paddingBottom: "calc(96px + env(safe-area-inset-bottom))" }}>
+      <div style={{ flex: 1, position: "relative", overflow: "hidden", display: "flex" }}>
+      <main ref={scrollRef} id="cellar-main" className="no-scrollbar" style={{ flex: 1, overflowY: "auto", padding: "4px 16px", paddingBottom: "calc(96px + env(safe-area-inset-bottom))" }}>
         {loading ? (
           <StickmanLoading />
         ) : (
@@ -366,7 +367,7 @@ function AppInner() {
               />
             )}
             {tab === "import" && (
-              <ImportView fileRef={fileRef} onImport={handleImport} importing={importing} progress={progress} cancelImport={cancelImport} />
+              <ImportView fileRef={fileRef} onImport={handleImport} importing={importing} progress={progress} cancelImport={cancelImport} sakes={sakes} />
             )}
             {tab === "collage" && (
               <CollageView sakes={sakes} selected={selected} setSelected={setSelected} setSelectMode={setSelectMode} goCellar={() => setTab("cellar")} />
@@ -377,6 +378,25 @@ function AppInner() {
           </>
         )}
       </main>
+      {/* Big scrubber — only show when cellar tab and enough items */}
+      {filtered.length > 10 && (
+        <div
+          ref={scrubRef}
+          onPointerDown={e => { isDragging.current = true; e.currentTarget.setPointerCapture(e.pointerId); onScrubMove(e.clientY); }}
+          onPointerMove={e => { if (isDragging.current) onScrubMove(e.clientY); }}
+          onPointerUp={() => { isDragging.current = false; }}
+          style={{ position: "absolute", right: 0, top: 0, bottom: 0, width: 28, display: "flex", alignItems: "center", justifyContent: "center", cursor: "ns-resize", zIndex: 10, touchAction: "none" }}
+        >
+          <div style={{ width: 5, height: "55%", background: "rgba(201,146,42,0.18)", borderRadius: 99, position: "relative" }}>
+            <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%,-50%)", width: 22, height: 44, background: "rgba(201,146,42,0.22)", border: "1.5px solid rgba(201,146,42,0.5)", borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", backdropFilter: "blur(4px)" }}>
+              <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                {[0,1,2].map(i => <div key={i} style={{ width: 10, height: 2, background: "#c9922a", borderRadius: 99, opacity: 0.8 }} />)}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      </div>
 
       {/* ─── Bottom Nav ─── */}
       <nav style={{ position: "fixed", bottom: 0, left: "50%", transform: "translateX(-50%)", width: "100%", maxWidth: 460, background: "rgba(10,6,2,0.92)", backdropFilter: "blur(20px)", borderTop: "1px solid var(--line)", display: "flex", paddingBottom: "env(safe-area-inset-bottom)" }}>
@@ -422,6 +442,17 @@ function CellarView(props) {
     bgLoading, hasMore } = props;
   const gold = "#c9922a";
   const [showSort, setShowSort] = useState(false);
+  const scrollRef = useRef(null);
+  const scrubRef = useRef(null);
+  const isDragging = useRef(false);
+
+  const onScrubMove = (clientY) => {
+    if (!scrollRef.current || !scrubRef.current) return;
+    const track = scrubRef.current.getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(1, (clientY - track.top) / track.height));
+    const el = scrollRef.current;
+    el.scrollTop = ratio * (el.scrollHeight - el.clientHeight);
+  };
   // 排序選項：依加入時間 / 依價格，各有升降序
   const sortOptions = [
     { k: "time-desc", label: "加入時間（新→舊）" },
@@ -439,7 +470,10 @@ function CellarView(props) {
         <div style={{ position: "relative", flex: 1 }}>
           <span style={{ position: "absolute", left: 13, top: "50%", transform: "translateY(-50%)", color: "#5a5042", fontSize: 14 }}>🔍</span>
           <input value={search} onChange={e => setSearch(e.target.value)} placeholder="搜尋 酒名 · 酒造 · 産地 · 酒米"
-            style={{ width: "100%", background: "rgba(255,255,255,0.05)", border: "1px solid var(--line)", borderRadius: 12, padding: "11px 14px 11px 38px", color: "var(--ink)", fontSize: 13, outline: "none" }} />
+            style={{ width: "100%", background: "rgba(255,255,255,0.05)", border: "1px solid var(--line)", borderRadius: 12, padding: "11px 36px 11px 38px", color: "var(--ink)", fontSize: 13, outline: "none" }} />
+          {search && (
+            <button onClick={() => setSearch("")} style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", background: "rgba(255,255,255,0.1)", border: "none", color: "#aaa", borderRadius: 99, width: 22, height: 22, fontSize: 13, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>✕</button>
+          )}
         </div>
         <button
           onClick={() => { if (selectMode) { clearSelect(); } else { setSelectMode(true); } }}
@@ -631,9 +665,242 @@ function SakeCard({ sake, selected, selectMode, onSelect, onOpen, onLongPress })
 const gold = "#c9922a";
 
 // ═══════════════════════════ 匯入 ═══════════════════════════
-function ImportView({ fileRef, onImport, importing, progress, cancelImport }) {
+
+// ═══════════════════════════ 即時掃描比對 ═══════════════════════════
+function ScanView({ sakes }) {
+  const videoRef = useRef(null);
+  const canvasRef = useRef(null);
+  const streamRef = useRef(null);
+  const [cameraOn, setCameraOn] = useState(false);
+  const [scanning, setScanning] = useState(false);
+  const [matches, setMatches] = useState(null); // null | { exact, similar }
+  const [snapUrl, setSnapUrl] = useState(null);
+  const [err, setErr] = useState("");
+
+  const startCamera = async () => {
+    setErr("");
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } }
+      });
+      streamRef.current = stream;
+      if (videoRef.current) videoRef.current.srcObject = stream;
+      setCameraOn(true);
+    } catch (e) {
+      setErr("無法開啟相機，請確認已授權相機權限");
+    }
+  };
+
+  const stopCamera = () => {
+    if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop());
+    streamRef.current = null;
+    setCameraOn(false);
+    setMatches(null);
+    setSnapUrl(null);
+  };
+
+  useEffect(() => () => { if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop()); }, []);
+
+  const snap = async () => {
+    if (!videoRef.current || !canvasRef.current) return;
+    const v = videoRef.current;
+    const canvas = canvasRef.current;
+    canvas.width = v.videoWidth;
+    canvas.height = v.videoHeight;
+    canvas.getContext("2d").drawImage(v, 0, 0);
+    const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
+    setSnapUrl(dataUrl);
+    setScanning(true);
+    setMatches(null);
+    try {
+      const base64 = dataUrl.split(",")[1];
+      const res = await fetch("/api/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          imageBase64: base64,
+          prompt: `你是日本酒辨識專家。請辨識這張酒標圖片中的酒名（日文原名）。只回傳 JSON，格式：{"name":"酒名","brewery":"酒造","confidence":"high/medium/low"}。如果無法辨識回傳 {"name":"","brewery":"","confidence":"low"}`
+        })
+      });
+      const data = await res.json();
+      let parsed = { name: "", brewery: "", confidence: "low" };
+      try {
+        const text = (data.result || data.content?.[0]?.text || "").replace(/```json|```/g, "").trim();
+        parsed = JSON.parse(text);
+      } catch {}
+
+      if (!parsed.name) {
+        setMatches({ exact: null, similar: [], query: "" });
+        setScanning(false);
+        return;
+      }
+
+      const q = parsed.name.toLowerCase().replace(/\s/g, "");
+      const qBrewery = (parsed.brewery || "").toLowerCase();
+
+      // Compare against cellar
+      const scored = sakes.map(s => {
+        const info = s.info || {};
+        const sakeName = (info.name || s.name || "").toLowerCase().replace(/\s/g, "");
+        const brewery = (info.brewery || "").toLowerCase();
+        let score = 0;
+        if (sakeName === q) score = 100;
+        else if (sakeName.includes(q) || q.includes(sakeName)) score = 70;
+        else {
+          // char overlap ratio
+          const a = new Set(q.split(""));
+          const b = new Set(sakeName.split(""));
+          const inter = [...a].filter(c => b.has(c)).length;
+          score = Math.round((inter / Math.max(a.size, b.size)) * 60);
+        }
+        if (qBrewery && brewery.includes(qBrewery)) score = Math.min(100, score + 15);
+        return { sake: s, score };
+      }).filter(x => x.score > 30).sort((a, b) => b.score - a.score);
+
+      const exact = scored.find(x => x.score === 100)?.sake || null;
+      const similar = scored.filter(x => x.score < 100 && x.score >= 50).slice(0, 3).map(x => x.sake);
+
+      setMatches({ exact, similar, query: parsed.name, brewery: parsed.brewery });
+    } catch (e) {
+      setErr("辨識失敗，請再試一次");
+    }
+    setScanning(false);
+  };
+
+  const reset = () => { setMatches(null); setSnapUrl(null); setErr(""); };
+
+  return (
+    <div className="fade-in" style={{ paddingBottom: 20 }}>
+      <div style={{ marginBottom: 18 }}>
+        <div className="mincho" style={{ fontSize: 20, color: gold, marginBottom: 6 }}>📷 掃描比對</div>
+        <div style={{ fontSize: 12, color: "#777", lineHeight: 1.6 }}>開啟鏡頭對準酒標，確認酒窖裡是否有這支酒</div>
+      </div>
+
+      {err && <div style={{ background: "rgba(183,58,50,0.15)", border: "1px solid rgba(183,58,50,0.3)", borderRadius: 10, padding: "10px 14px", fontSize: 12, color: "#e07a72", marginBottom: 14 }}>{err}</div>}
+
+      {!cameraOn ? (
+        <div style={{ textAlign: "center", padding: "40px 20px", border: "2px dashed rgba(201,146,42,0.3)", borderRadius: 18, background: "rgba(201,146,42,0.04)" }}>
+          <div style={{ fontSize: 48, marginBottom: 14 }}>📷</div>
+          <div style={{ fontSize: 14, color: gold, marginBottom: 8 }}>開啟鏡頭比對酒標</div>
+          <div style={{ fontSize: 11, color: "#5a5042", marginBottom: 20 }}>拍一張照片，AI 比對你的酒窖資料庫</div>
+          <button onClick={startCamera} style={{ background: `linear-gradient(135deg,${gold},#e8b84b)`, border: "none", color: "#0e0a06", borderRadius: 11, padding: "12px 28px", fontSize: 14, fontWeight: 700 }}>開啟相機</button>
+        </div>
+      ) : (
+        <div>
+          {/* Camera view */}
+          {!snapUrl && (
+            <div style={{ position: "relative", borderRadius: 14, overflow: "hidden", background: "#000", marginBottom: 14 }}>
+              <video ref={videoRef} autoPlay playsInline muted style={{ width: "100%", display: "block", maxHeight: 320, objectFit: "cover" }} />
+              <div style={{ position: "absolute", inset: 0, border: "2px solid rgba(201,146,42,0.4)", borderRadius: 14, pointerEvents: "none" }} />
+              <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%,-50%)", width: "60%", height: "45%", border: "2px dashed rgba(201,146,42,0.7)", borderRadius: 8, pointerEvents: "none" }} />
+            </div>
+          )}
+
+          {/* Snapshot preview */}
+          {snapUrl && (
+            <div style={{ borderRadius: 14, overflow: "hidden", background: "#000", marginBottom: 14 }}>
+              <img src={snapUrl} alt="snap" style={{ width: "100%", display: "block", maxHeight: 320, objectFit: "cover" }} />
+            </div>
+          )}
+
+          <canvas ref={canvasRef} style={{ display: "none" }} />
+
+          {/* Buttons */}
+          <div style={{ display: "flex", gap: 10, marginBottom: 20 }}>
+            {!snapUrl ? (
+              <>
+                <button onClick={snap} disabled={scanning} style={{ flex: 2, background: `linear-gradient(135deg,${gold},#e8b84b)`, border: "none", color: "#0e0a06", borderRadius: 12, padding: "14px", fontSize: 15, fontWeight: 700 }}>
+                  {scanning ? "辨識中…" : "📸 拍照比對"}
+                </button>
+                <button onClick={stopCamera} style={{ flex: 1, background: "rgba(255,255,255,0.05)", border: "1px solid var(--line)", color: "#aaa", borderRadius: 12, padding: "14px", fontSize: 13 }}>關閉</button>
+              </>
+            ) : (
+              <>
+                <button onClick={reset} style={{ flex: 1, background: "rgba(255,255,255,0.05)", border: "1px solid var(--line)", color: "#aaa", borderRadius: 12, padding: "14px", fontSize: 13 }}>🔄 重拍</button>
+                <button onClick={stopCamera} style={{ flex: 1, background: "rgba(255,255,255,0.05)", border: "1px solid var(--line)", color: "#aaa", borderRadius: 12, padding: "14px", fontSize: 13 }}>關閉</button>
+              </>
+            )}
+          </div>
+
+          {/* Scanning indicator */}
+          {scanning && (
+            <div style={{ textAlign: "center", padding: "20px 0" }}>
+              <div style={{ width: 30, height: 30, border: `3px solid ${gold}33`, borderTop: `3px solid ${gold}`, borderRadius: "50%", animation: "spin 1s linear infinite", margin: "0 auto 10px" }} />
+              <div style={{ fontSize: 13, color: gold }}>AI 辨識比對中…</div>
+            </div>
+          )}
+
+          {/* Results */}
+          {matches && !scanning && (
+            <div>
+              <div style={{ fontSize: 12, color: "#8a7055", marginBottom: 12 }}>
+                辨識結果：<span style={{ color: gold }}>{matches.query || "無法辨識"}</span>
+                {matches.brewery ? <span style={{ color: "#6a5a3a" }}> · {matches.brewery}</span> : ""}
+              </div>
+
+              {matches.exact ? (
+                <div style={{ background: "rgba(40,180,80,0.1)", border: "1px solid rgba(40,180,80,0.3)", borderRadius: 12, padding: 14, marginBottom: 12 }}>
+                  <div style={{ fontSize: 12, color: "#4fc87a", marginBottom: 8, fontWeight: 700 }}>✅ 完全符合 — 酒窖裡有這支酒！</div>
+                  <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+                    {matches.exact.imageUrl && <img src={matches.exact.imageUrl} style={{ width: 52, height: 68, objectFit: "cover", borderRadius: 6 }} alt="" />}
+                    <div>
+                      <div style={{ fontSize: 14, color: "var(--ink)", fontWeight: 600 }}>{matches.exact.info?.name || matches.exact.name}</div>
+                      {matches.exact.info?.brewery && <div style={{ fontSize: 11, color: "#8a7055", marginTop: 3 }}>{matches.exact.info.brewery}</div>}
+                      {matches.exact.info?.date && <div style={{ fontSize: 11, color: "#5a5042", marginTop: 2 }}>喝過：{matches.exact.info.date}</div>}
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div style={{ background: "rgba(201,146,42,0.08)", border: "1px solid rgba(201,146,42,0.2)", borderRadius: 10, padding: "10px 14px", marginBottom: 12, fontSize: 12, color: "#8a7055" }}>
+                  {matches.query ? "❌ 酒窖裡沒有完全符合的酒" : "⚠️ 無法從圖片辨識酒名，請確認酒標清晰"}
+                </div>
+              )}
+
+              {matches.similar.length > 0 && (
+                <div>
+                  <div style={{ fontSize: 12, color: "#8a7055", marginBottom: 10 }}>相似度高的酒（{matches.similar.length} 支）</div>
+                  {matches.similar.map(s => (
+                    <div key={s.id} style={{ display: "flex", gap: 12, alignItems: "center", padding: "10px 0", borderBottom: "1px solid var(--line)" }}>
+                      {s.imageUrl && <img src={s.imageUrl} style={{ width: 44, height: 58, objectFit: "cover", borderRadius: 6, flexShrink: 0 }} alt="" />}
+                      <div>
+                        <div style={{ fontSize: 13, color: "var(--ink)" }}>{s.info?.name || s.name}</div>
+                        {s.info?.brewery && <div style={{ fontSize: 11, color: "#8a7055", marginTop: 2 }}>{s.info.brewery}</div>}
+                        {s.info?.date && <div style={{ fontSize: 11, color: "#5a5042", marginTop: 2 }}>喝過：{s.info.date}</div>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {!matches.exact && matches.similar.length === 0 && matches.query && (
+                <div style={{ textAlign: "center", padding: "14px 0", fontSize: 12, color: "#5a5042" }}>酒窖裡沒有相似的酒，可以放心買！🍶</div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ImportView({ fileRef, onImport, importing, progress, cancelImport, sakes }) {
+  const [subTab, setSubTab] = useState("import"); // "import" | "scan"
+
   return (
     <div className="fade-in">
+      {/* 子頁切換 */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 20, background: "rgba(255,255,255,0.04)", borderRadius: 12, padding: 5 }}>
+        {[{ k: "import", label: "📥 匯入照片" }, { k: "scan", label: "📷 掃描比對" }].map(o => (
+          <button key={o.k} onClick={() => setSubTab(o.k)} style={{
+            flex: 1, padding: "10px", borderRadius: 9, fontSize: 13, fontWeight: subTab === o.k ? 700 : 400,
+            background: subTab === o.k ? `linear-gradient(135deg,${gold},#e8b84b)` : "transparent",
+            border: "none", color: subTab === o.k ? "#0e0a06" : "#888", transition: "all .18s",
+          }}>{o.label}</button>
+        ))}
+      </div>
+
+      {subTab === "scan" ? <ScanView sakes={sakes} /> : (
+      <div>
       <div style={{ marginBottom: 22 }}>
         <div className="mincho" style={{ fontSize: 20, color: gold, marginBottom: 6 }}>匯入照片</div>
         <div style={{ fontSize: 12, color: "#777", lineHeight: 1.6 }}>從相簿選擇酒瓶照片，AI 自動辨識酒標、查詢風味與搭配建議</div>
@@ -671,57 +938,114 @@ function ImportView({ fileRef, onImport, importing, progress, cancelImport }) {
           ・ 每張約需 3–6 秒，可放著批次處理
         </div>
       </div>
+      </div>
+      )}
     </div>
   );
 }
 
 // ═══════════════════════════ 拼接 ═══════════════════════════
+const COLLAGE_MAX = 50; // 單張上限
+
+function chunkArray(arr, size) {
+  const chunks = [];
+  const n = arr.length;
+  const numGroups = Math.ceil(n / size);
+  const base = Math.floor(n / numGroups);
+  let remainder = n % numGroups;
+  let i = 0;
+  for (let g = 0; g < numGroups; g++) {
+    const len = base + (remainder-- > 0 ? 1 : 0);
+    chunks.push(arr.slice(i, i + len));
+    i += len;
+  }
+  return chunks;
+}
+
 function CollageView({ sakes, selected, setSelected, setSelectMode, goCellar }) {
   const [layout, setLayout] = useState("tidy");
+  const [mode, setMode] = useState("single"); // "single" | "multi"
   const [result, setResult] = useState(null);
+  const [results, setResults] = useState([]); // multi mode
   const [building, setBuilding] = useState(false);
   const [seed, setSeed] = useState(1);
 
   const chosen = sakes.filter(s => selected.has(s.id) && s.imageUrl);
+  const overLimit = mode === "single" && chosen.length > COLLAGE_MAX;
 
   const build = useCallback(async () => {
     if (chosen.length === 0) return;
     setBuilding(true);
     setResult(null);
-    const urls = chosen.map(s => s.imageUrl);
+    setResults([]);
     try {
-      const dataUrl = layout === "tidy"
-        ? await buildTidyCollage(urls)
-        : await buildScatteredCollage(urls, { seed });
-      setResult(dataUrl);
+      if (mode === "single") {
+        const urls = chosen.slice(0, COLLAGE_MAX).map(s => s.imageUrl);
+        const dataUrl = layout === "tidy"
+          ? await buildTidyCollage(urls)
+          : await buildScatteredCollage(urls, { seed });
+        setResult(dataUrl);
+      } else {
+        // multi: auto-split into groups of max 50
+        const allUrls = chosen.map(s => s.imageUrl);
+        const groups = chunkArray(allUrls, COLLAGE_MAX);
+        const built = [];
+        for (const grp of groups) {
+          const dataUrl = layout === "tidy"
+            ? await buildTidyCollage(grp)
+            : await buildScatteredCollage(grp, { seed });
+          built.push(dataUrl);
+        }
+        setResults(built);
+      }
     } catch (e) { console.error(e); }
     setBuilding(false);
-  }, [chosen, layout, seed]);
+  }, [chosen, layout, seed, mode]);
 
-  // 切換版面自動重建
-  useEffect(() => { if (chosen.length > 0) build(); /* eslint-disable-next-line */ }, [layout, seed]);
+  useEffect(() => { if (chosen.length > 0) build(); /* eslint-disable-next-line */ }, [layout, seed, mode]);
 
   return (
     <div className="fade-in">
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 18 }}>
         <div>
           <div className="mincho" style={{ fontSize: 20, color: gold, marginBottom: 6 }}>照片拼接</div>
-          <div style={{ fontSize: 12, color: "#777" }}>
-            {chosen.length > 0 ? `已選 ${chosen.length} 張 · 正方形輸出` : "請先到酒窖選擇照片"}
+          <div style={{ fontSize: 12, color: overLimit ? "#e07a72" : "#777" }}>
+            {chosen.length > 0
+              ? mode === "single"
+                ? overLimit
+                  ? `已選 ${chosen.length} 張 · 單張模式上限 ${COLLAGE_MAX} 張，將取前 ${COLLAGE_MAX} 張`
+                  : `已選 ${chosen.length} 張 · 正方形輸出`
+                : `已選 ${chosen.length} 張 · 自動分成 ${Math.ceil(chosen.length / COLLAGE_MAX)} 張大圖`
+              : "請先到酒窖選擇照片"}
           </div>
         </div>
         <button
           onClick={() => { setSelected(new Set()); setSelectMode(false); goCellar(); }}
           style={{ flexShrink: 0, background: "rgba(255,255,255,0.06)", border: "1px solid var(--line)", color: "#bba080", borderRadius: 99, padding: "7px 14px", fontSize: 12 }}
-        >
-          ✕ 取消
-        </button>
+        >✕ 取消</button>
+      </div>
+
+      {/* 模式切換 */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 14, background: "rgba(255,255,255,0.04)", borderRadius: 12, padding: 4 }}>
+        {[
+          { k: "single", label: `單張（最多${COLLAGE_MAX}張）`, icon: "□" },
+          { k: "multi",  label: "多張自動分組", icon: "⊟" },
+        ].map(o => (
+          <button key={o.k} onClick={() => setMode(o.k)} style={{
+            flex: 1, padding: "9px 6px", borderRadius: 9, fontSize: 12, fontWeight: mode === o.k ? 700 : 400,
+            background: mode === o.k ? `linear-gradient(135deg,${gold},#e8b84b)` : "transparent",
+            border: "none", color: mode === o.k ? "#0e0a06" : "#888", transition: "all .15s",
+          }}>{o.icon} {o.label}</button>
+        ))}
       </div>
 
       {chosen.length === 0 ? (
         <div style={{ textAlign: "center", padding: "50px 20px", color: "#4a4236" }}>
           <div className="mincho" style={{ fontSize: 46, color: "#3a3025", marginBottom: 14 }}>繪</div>
-          <div style={{ fontSize: 13, marginBottom: 18 }}>到酒窖長按或點選照片，挑選要拼接的酒</div>
+          <div style={{ fontSize: 13, marginBottom: 6 }}>到酒窖長按或點選照片，挑選要拼接的酒</div>
+          <div style={{ fontSize: 11, color: "#5a5042", marginBottom: 18 }}>
+            單張模式：最多選 {COLLAGE_MAX} 張 · 多張模式：無上限，自動分組
+          </div>
           <button onClick={() => { setSelectMode(true); goCellar(); }} style={{ background: gold, border: "none", color: "#0e0a06", borderRadius: 11, padding: "11px 26px", fontSize: 13, fontWeight: 600 }}>前往酒窖選擇</button>
         </div>
       ) : (
@@ -745,26 +1069,43 @@ function CollageView({ sakes, selected, setSelected, setSelectMode, goCellar }) 
             ))}
           </div>
 
-          {/* 預覽 */}
-          <div style={{ aspectRatio: "1", borderRadius: 14, overflow: "hidden", background: "#0a0704", border: "1px solid var(--line)", marginBottom: 16, display: "flex", alignItems: "center", justifyContent: "center", position: "relative" }}>
-            {building && (
-              <div style={{ textAlign: "center" }}>
-                <div style={{ width: 30, height: 30, border: `3px solid ${gold}33`, borderTop: `3px solid ${gold}`, borderRadius: "50%", animation: "spin 1s linear infinite", margin: "0 auto 10px" }} />
-                <span style={{ fontSize: 12, color: gold }}>合成中…</span>
-              </div>
-            )}
-            {!building && result && <img src={result} alt="collage" style={{ width: "100%", height: "100%", objectFit: "contain" }} />}
-          </div>
+          {/* 預覽 — single */}
+          {mode === "single" && (
+            <div style={{ aspectRatio: "1", borderRadius: 14, overflow: "hidden", background: "#0a0704", border: "1px solid var(--line)", marginBottom: 16, display: "flex", alignItems: "center", justifyContent: "center", position: "relative" }}>
+              {building && <div style={{ textAlign: "center" }}><div style={{ width: 30, height: 30, border: `3px solid ${gold}33`, borderTop: `3px solid ${gold}`, borderRadius: "50%", animation: "spin 1s linear infinite", margin: "0 auto 10px" }} /><span style={{ fontSize: 12, color: gold }}>合成中…</span></div>}
+              {!building && result && <img src={result} alt="collage" style={{ width: "100%", height: "100%", objectFit: "contain" }} />}
+            </div>
+          )}
+
+          {/* 預覽 — multi */}
+          {mode === "multi" && (
+            <div style={{ marginBottom: 16 }}>
+              {building && <div style={{ textAlign: "center", padding: "30px 0" }}><div style={{ width: 30, height: 30, border: `3px solid ${gold}33`, borderTop: `3px solid ${gold}`, borderRadius: "50%", animation: "spin 1s linear infinite", margin: "0 auto 10px" }} /><span style={{ fontSize: 12, color: gold }}>合成中…</span></div>}
+              {!building && results.map((r, i) => (
+                <div key={i} style={{ marginBottom: 12 }}>
+                  <div style={{ fontSize: 11, color: "#8a7055", marginBottom: 6 }}>第 {i + 1} 張 / 共 {results.length} 張</div>
+                  <div style={{ aspectRatio: "1", borderRadius: 14, overflow: "hidden", background: "#0a0704", border: "1px solid var(--line)", marginBottom: 8 }}>
+                    <img src={r} alt={`collage-${i}`} style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+                  </div>
+                  <button onClick={() => downloadDataUrl(r, `sake-cellar-${layout}-${i+1}-${Date.now()}.jpg`)} style={{ width: "100%", background: `linear-gradient(135deg,${gold},#e8b84b)`, border: "none", color: "#0e0a06", borderRadius: 12, padding: "11px", fontSize: 13, fontWeight: 700 }}>
+                    ⬇ 儲存第 {i + 1} 張
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
 
           {/* 操作 */}
-          <div style={{ display: "flex", gap: 10 }}>
-            {layout === "scattered" && (
-              <button onClick={() => setSeed(s => s + 1)} style={{ padding: "13px 16px", background: "rgba(255,255,255,0.05)", border: "1px solid var(--line)", borderRadius: 12, color: "#aaa", fontSize: 13 }}>🎲 換排列</button>
-            )}
-            <button disabled={!result || building} onClick={() => downloadDataUrl(result, `sake-cellar-${layout}-${Date.now()}.jpg`)} style={{ flex: 1, background: result && !building ? `linear-gradient(135deg,${gold},#e8b84b)` : "#333", border: "none", color: result && !building ? "#0e0a06" : "#666", borderRadius: 12, padding: "13px", fontSize: 14, fontWeight: 700 }}>
-              ⬇ 儲存拼接圖
-            </button>
-          </div>
+          {mode === "single" && (
+            <div style={{ display: "flex", gap: 10 }}>
+              {layout === "scattered" && (
+                <button onClick={() => setSeed(s => s + 1)} style={{ padding: "13px 16px", background: "rgba(255,255,255,0.05)", border: "1px solid var(--line)", borderRadius: 12, color: "#aaa", fontSize: 13 }}>🎲 換排列</button>
+              )}
+              <button disabled={!result || building} onClick={() => downloadDataUrl(result, `sake-cellar-${layout}-${Date.now()}.jpg`)} style={{ flex: 1, background: result && !building ? `linear-gradient(135deg,${gold},#e8b84b)` : "#333", border: "none", color: result && !building ? "#0e0a06" : "#666", borderRadius: 12, padding: "13px", fontSize: 14, fontWeight: 700 }}>
+                ⬇ 儲存拼接圖
+              </button>
+            </div>
+          )}
           <div style={{ fontSize: 11, color: "#5a5042", textAlign: "center", marginTop: 12 }}>
             儲存後可長按圖片存到相簿，或直接分享
           </div>
@@ -1276,6 +1617,16 @@ function DetailSheet({ sake, onClose, onDelete, onReanalyze, onSaveBackImage }) 
         )}
 
         <div style={{ padding: "16px 20px 28px" }}>
+          {/* 單瓶分享按鈕 */}
+          <button id="sake-share-btn" onClick={async () => {
+            const shareUrl = `${window.location.origin}/share-sake/${sake.id}`;
+            try { await navigator.clipboard.writeText(shareUrl); } catch {}
+            const btn = document.getElementById("sake-share-btn");
+            if (btn) { btn.textContent = "✅ 連結已複製！"; setTimeout(() => { if (btn) btn.textContent = "🔗 分享這支酒（唯讀連結）"; }, 2200); }
+          }} style={{ width: "100%", background: "rgba(201,146,42,0.08)", border: "1px solid rgba(201,146,42,0.3)", color: gold, borderRadius: 10, padding: "9px 14px", fontSize: 12, fontWeight: 600, marginBottom: 14, textAlign: "center" }}>
+            🔗 分享這支酒（唯讀連結）
+          </button>
+
           {/* 標題區 */}
           <div style={{ display: "flex", gap: 7, flexWrap: "wrap", marginBottom: 10 }}>
             <span className="mincho" style={{ fontSize: 11, background: color, color: "#fff", padding: "3px 11px", borderRadius: 99, fontWeight: 600 }}>{i.category || "酒"}</span>
@@ -1683,7 +2034,10 @@ function SharedCellar({ token }) {
               <div style={{ position: "relative", flex: 1 }}>
                 <span style={{ position: "absolute", left: 13, top: "50%", transform: "translateY(-50%)", color: "#5a5042", fontSize: 14 }}>🔍</span>
                 <input value={search} onChange={e => setSearch(e.target.value)} placeholder="搜尋 酒名 · 酒造 · 産地 · 酒米"
-                  style={{ width: "100%", background: "rgba(255,255,255,0.05)", border: "1px solid var(--line)", borderRadius: 12, padding: "11px 14px 11px 38px", color: "var(--ink)", fontSize: 13, outline: "none" }} />
+                  style={{ width: "100%", background: "rgba(255,255,255,0.05)", border: "1px solid var(--line)", borderRadius: 12, padding: "11px 36px 11px 38px", color: "var(--ink)", fontSize: 13, outline: "none" }} />
+                {search && (
+                  <button onClick={() => setSearch("")} style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", background: "rgba(255,255,255,0.1)", border: "none", color: "#aaa", borderRadius: 99, width: 22, height: 22, fontSize: 13, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>✕</button>
+                )}
               </div>
             </div>
 
