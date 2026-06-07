@@ -693,158 +693,168 @@ function ScanView({ sakes }) {
   const streamRef = useRef(null);
   const [cameraOn, setCameraOn] = useState(false);
   const [scanning, setScanning] = useState(false);
-  const [matches, setMatches] = useState(null); // null | { exact, similar }
+  const [matches, setMatches] = useState(null);
   const [snapUrl, setSnapUrl] = useState(null);
   const [err, setErr] = useState("");
+  // 固定鏡頭區塊高度，避免拍照後版面跳動
+  const CAM_H = 340;
 
-  // When cameraOn becomes true and video element renders, bind the stream
-  useEffect(() => {
-    if (cameraOn && videoRef.current && streamRef.current) {
-      videoRef.current.srcObject = streamRef.current;
-      videoRef.current.play().catch(() => {});
+  // 用 callback ref：video 元素 mount 後立刻綁 stream
+  const videoCallbackRef = useCallback((node) => {
+    videoRef.current = node;
+    if (node && streamRef.current) {
+      node.srcObject = streamRef.current;
+      node.play().catch(() => {});
     }
-  }, [cameraOn]);
+  }, []);
 
   const startCamera = async () => {
     setErr("");
+    setSnapUrl(null);
+    setMatches(null);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } }
+        video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 } }
       });
       streamRef.current = stream;
-      setCameraOn(true); // render <video> first, then useEffect binds stream
+      // 若 video 已 mount，直接綁（避免時序問題）
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        videoRef.current.play().catch(() => {});
+      }
+      setCameraOn(true);
     } catch (e) {
-      setErr("無法開啟相機，請確認已授權相機權限");
-      console.error("Camera error:", e);
+      setErr("無法開啟相機，請確認已授權相機權限（設定 → Safari → 相機）");
     }
   };
 
   const stopCamera = () => {
-    if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop());
-    streamRef.current = null;
+    if (streamRef.current) { streamRef.current.getTracks().forEach(t => t.stop()); streamRef.current = null; }
     setCameraOn(false);
     setMatches(null);
     setSnapUrl(null);
+    setErr("");
   };
 
-  useEffect(() => () => { if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop()); }, []);
+  // 重拍：清掉 snapshot，重新綁 stream 到 video
+  const reset = () => {
+    setMatches(null);
+    setSnapUrl(null);
+    setErr("");
+    // video 元素重新出現後 videoCallbackRef 會自動綁 stream
+  };
 
+  useEffect(() => () => {
+    if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop());
+  }, []);
   const snap = async () => {
-    if (!videoRef.current || !canvasRef.current) return;
     const v = videoRef.current;
     const canvas = canvasRef.current;
-    canvas.width = v.videoWidth;
-    canvas.height = v.videoHeight;
+    if (!v || !canvas || v.readyState < 2) { setErr("鏡頭尚未就緒，請稍後再試"); return; }
+    canvas.width = v.videoWidth || 1280;
+    canvas.height = v.videoHeight || 720;
     canvas.getContext("2d").drawImage(v, 0, 0);
-    const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
+    const dataUrl = canvas.toDataURL("image/jpeg", 0.9);
     setSnapUrl(dataUrl);
     setScanning(true);
     setMatches(null);
+    setErr("");
     try {
       const base64 = dataUrl.split(",")[1];
+      // 使用標準 /api/analyze 格式（image 欄位），和正常辨識一樣
       const res = await fetch("/api/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          imageBase64: base64,
-          prompt: `你是日本酒辨識專家。請辨識這張酒標圖片中的酒名（日文原名）。只回傳 JSON，格式：{"name":"酒名","brewery":"酒造","confidence":"high/medium/low"}。如果無法辨識回傳 {"name":"","brewery":"","confidence":"low"}`
-        })
+        body: JSON.stringify({ image: base64, mimeType: "image/jpeg" })
       });
       const data = await res.json();
-      let parsed = { name: "", brewery: "", confidence: "low" };
-      try {
-        const text = (data.result || data.content?.[0]?.text || "").replace(/```json|```/g, "").trim();
-        parsed = JSON.parse(text);
-      } catch {}
-
-      if (!parsed.name) {
+      const info = data.info;
+      if (!info || !info.name) {
         setMatches({ exact: null, similar: [], query: "" });
         setScanning(false);
         return;
       }
-
-      const q = parsed.name.toLowerCase().replace(/\s/g, "");
-      const qBrewery = (parsed.brewery || "").toLowerCase();
-
-      // Compare against cellar
+      const q = (info.name || "").toLowerCase().replace(/\s+/g, "");
+      const qBr = (info.brewery || "").toLowerCase();
       const scored = sakes.map(s => {
-        const info = s.info || {};
-        const sakeName = (info.name || s.name || "").toLowerCase().replace(/\s/g, "");
-        const brewery = (info.brewery || "").toLowerCase();
+        const si = s.info || {};
+        const sName = (si.name || s.name || "").toLowerCase().replace(/\s+/g, "");
+        const sBr = (si.brewery || "").toLowerCase();
         let score = 0;
-        if (sakeName === q) score = 100;
-        else if (sakeName.includes(q) || q.includes(sakeName)) score = 70;
-        else {
-          // char overlap ratio
-          const a = new Set(q.split(""));
-          const b = new Set(sakeName.split(""));
+        if (sName && sName === q) score = 100;
+        else if (sName && (sName.includes(q) || q.includes(sName))) score = 75;
+        else if (sName && q) {
+          const a = new Set(q.split("")); const b = new Set(sName.split(""));
           const inter = [...a].filter(c => b.has(c)).length;
-          score = Math.round((inter / Math.max(a.size, b.size)) * 60);
+          score = Math.round((inter / Math.max(a.size, b.size, 1)) * 55);
         }
-        if (qBrewery && brewery.includes(qBrewery)) score = Math.min(100, score + 15);
+        if (qBr && sBr && sBr.includes(qBr)) score = Math.min(100, score + 20);
         return { sake: s, score };
-      }).filter(x => x.score > 30).sort((a, b) => b.score - a.score);
-
-      const exact = scored.find(x => x.score === 100)?.sake || null;
-      const similar = scored.filter(x => x.score < 100 && x.score >= 50).slice(0, 3).map(x => x.sake);
-
-      setMatches({ exact, similar, query: parsed.name, brewery: parsed.brewery });
+      }).filter(x => x.score > 25).sort((a, b) => b.score - a.score);
+      setMatches({
+        exact: scored.find(x => x.score >= 95)?.sake || null,
+        similar: scored.filter(x => x.score < 95 && x.score >= 45).slice(0, 3).map(x => x.sake),
+        query: info.name,
+        brewery: info.brewery,
+      });
     } catch (e) {
-      setErr("辨識失敗，請再試一次");
+      setErr("辨識請求失敗，請再試一次");
     }
     setScanning(false);
   };
 
-  const reset = () => { setMatches(null); setSnapUrl(null); setErr(""); };
-
   return (
     <div className="fade-in" style={{ paddingBottom: 20 }}>
-      <div style={{ marginBottom: 18 }}>
-        <div className="mincho" style={{ fontSize: 20, color: gold, marginBottom: 6 }}>📷 掃描比對</div>
-        <div style={{ fontSize: 12, color: "#777", lineHeight: 1.6 }}>開啟鏡頭對準酒標，確認酒窖裡是否有這支酒</div>
+      <div style={{ marginBottom: 14 }}>
+        <div className="mincho" style={{ fontSize: 20, color: gold, marginBottom: 4 }}>📷 掃描比對</div>
+        <div style={{ fontSize: 12, color: "#777" }}>開啟鏡頭對準酒標，確認酒窖裡是否有這支酒</div>
       </div>
 
-      {err && <div style={{ background: "rgba(183,58,50,0.15)", border: "1px solid rgba(183,58,50,0.3)", borderRadius: 10, padding: "10px 14px", fontSize: 12, color: "#e07a72", marginBottom: 14 }}>{err}</div>}
+      {err && <div style={{ background: "rgba(183,58,50,0.15)", border: "1px solid rgba(183,58,50,0.3)", borderRadius: 10, padding: "10px 14px", fontSize: 12, color: "#e07a72", marginBottom: 12 }}>{err}</div>}
 
       {!cameraOn ? (
-        <div style={{ textAlign: "center", padding: "40px 20px", border: "2px dashed rgba(201,146,42,0.3)", borderRadius: 18, background: "rgba(201,146,42,0.04)" }}>
-          <div style={{ fontSize: 48, marginBottom: 14 }}>📷</div>
-          <div style={{ fontSize: 14, color: gold, marginBottom: 8 }}>開啟鏡頭比對酒標</div>
-          <div style={{ fontSize: 11, color: "#5a5042", marginBottom: 20 }}>拍一張照片，AI 比對你的酒窖資料庫</div>
+        <div style={{ textAlign: "center", padding: "36px 20px", border: "2px dashed rgba(201,146,42,0.3)", borderRadius: 18, background: "rgba(201,146,42,0.04)" }}>
+          <div style={{ fontSize: 44, marginBottom: 12 }}>📷</div>
+          <div style={{ fontSize: 14, color: gold, marginBottom: 6 }}>開啟鏡頭比對酒標</div>
+          <div style={{ fontSize: 11, color: "#5a5042", marginBottom: 18 }}>拍一張照片，AI 比對你的酒窖資料庫</div>
           <button onClick={startCamera} style={{ background: `linear-gradient(135deg,${gold},#e8b84b)`, border: "none", color: "#0e0a06", borderRadius: 11, padding: "12px 28px", fontSize: 14, fontWeight: 700 }}>開啟相機</button>
         </div>
       ) : (
         <div>
-          {/* Camera view */}
-          {!snapUrl && (
-            <div style={{ position: "relative", borderRadius: 14, overflow: "hidden", background: "#000", marginBottom: 14 }}>
-              <video ref={videoRef} autoPlay playsInline muted style={{ width: "100%", display: "block", maxHeight: 320, objectFit: "cover" }} />
-              <div style={{ position: "absolute", inset: 0, border: "2px solid rgba(201,146,42,0.4)", borderRadius: 14, pointerEvents: "none" }} />
-              <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%,-50%)", width: "60%", height: "45%", border: "2px dashed rgba(201,146,42,0.7)", borderRadius: 8, pointerEvents: "none" }} />
-            </div>
-          )}
-
-          {/* Snapshot preview */}
-          {snapUrl && (
-            <div style={{ borderRadius: 14, overflow: "hidden", background: "#000", marginBottom: 14 }}>
-              <img src={snapUrl} alt="snap" style={{ width: "100%", display: "block", maxHeight: 320, objectFit: "cover" }} />
-            </div>
-          )}
+          {/* 固定高度的鏡頭/截圖區 — 高度不變，版面不跳 */}
+          <div style={{ position: "relative", borderRadius: 14, overflow: "hidden", background: "#111", marginBottom: 12, height: CAM_H }}>
+            {/* video 和 img 都撐滿同一個容器，互斥顯示 */}
+            <video
+              ref={videoCallbackRef}
+              autoPlay playsInline muted
+              style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", display: snapUrl ? "none" : "block" }}
+            />
+            {snapUrl && (
+              <img src={snapUrl} alt="snap"
+                style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }} />
+            )}
+            {/* 瞄準框 */}
+            {!snapUrl && (
+              <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%,-50%)", width: "65%", height: "50%", border: "2px dashed rgba(201,146,42,0.8)", borderRadius: 8, pointerEvents: "none" }} />
+            )}
+            {/* 外框 */}
+            <div style={{ position: "absolute", inset: 0, border: "1.5px solid rgba(201,146,42,0.3)", borderRadius: 14, pointerEvents: "none" }} />
+          </div>
 
           <canvas ref={canvasRef} style={{ display: "none" }} />
 
-          {/* Buttons */}
-          <div style={{ display: "flex", gap: 10, marginBottom: 20 }}>
+          {/* 按鈕 */}
+          <div style={{ display: "flex", gap: 10, marginBottom: 16 }}>
             {!snapUrl ? (
               <>
                 <button onClick={snap} disabled={scanning} style={{ flex: 2, background: `linear-gradient(135deg,${gold},#e8b84b)`, border: "none", color: "#0e0a06", borderRadius: 12, padding: "14px", fontSize: 15, fontWeight: 700 }}>
-                  {scanning ? "辨識中…" : "📸 拍照比對"}
+                  📸 拍照比對
                 </button>
                 <button onClick={stopCamera} style={{ flex: 1, background: "rgba(255,255,255,0.05)", border: "1px solid var(--line)", color: "#aaa", borderRadius: 12, padding: "14px", fontSize: 13 }}>關閉</button>
               </>
             ) : (
               <>
-                <button onClick={reset} style={{ flex: 1, background: "rgba(255,255,255,0.05)", border: "1px solid var(--line)", color: "#aaa", borderRadius: 12, padding: "14px", fontSize: 13 }}>🔄 重拍</button>
+                <button onClick={reset} style={{ flex: 1, background: `linear-gradient(135deg,${gold},#e8b84b)`, border: "none", color: "#0e0a06", borderRadius: 12, padding: "14px", fontSize: 14, fontWeight: 700 }}>🔄 重拍</button>
                 <button onClick={stopCamera} style={{ flex: 1, background: "rgba(255,255,255,0.05)", border: "1px solid var(--line)", color: "#aaa", borderRadius: 12, padding: "14px", fontSize: 13 }}>關閉</button>
               </>
             )}
