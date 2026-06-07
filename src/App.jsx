@@ -389,18 +389,38 @@ function AppInner() {
         )}
       </main>
       {/* Big scrubber — only show when cellar tab and enough items */}
-      {filtered.length > 10 && (
+      {tab === "cellar" && filtered.length > 10 && (
         <div
           ref={scrubRef}
-          onPointerDown={e => { isDragging.current = true; e.currentTarget.setPointerCapture(e.pointerId); onScrubMove(e.clientY); }}
-          onPointerMove={e => { if (isDragging.current) onScrubMove(e.clientY); }}
-          onPointerUp={() => { isDragging.current = false; }}
-          style={{ position: "absolute", right: 0, top: 0, bottom: 0, width: 28, display: "flex", alignItems: "center", justifyContent: "center", cursor: "ns-resize", zIndex: 10, touchAction: "none" }}
+          onPointerDown={e => {
+            isDragging.current = true;
+            e.currentTarget.setPointerCapture(e.pointerId);
+            e.preventDefault();
+            onScrubMove(e.clientY);
+          }}
+          onPointerMove={e => {
+            if (!isDragging.current) return;
+            e.preventDefault();
+            onScrubMove(e.clientY);
+          }}
+          onPointerUp={e => { isDragging.current = false; }}
+          onPointerCancel={e => { isDragging.current = false; }}
+          style={{ position: "absolute", right: 0, top: 0, bottom: 0, width: 36,
+            display: "flex", alignItems: "center", justifyContent: "center",
+            cursor: "ns-resize", zIndex: 10, touchAction: "none",
+            WebkitUserSelect: "none", userSelect: "none" }}
         >
-          <div style={{ width: 5, height: "55%", background: "rgba(201,146,42,0.18)", borderRadius: 99, position: "relative" }}>
-            <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%,-50%)", width: 22, height: 44, background: "rgba(201,146,42,0.22)", border: "1.5px solid rgba(201,146,42,0.5)", borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", backdropFilter: "blur(4px)" }}>
-              <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-                {[0,1,2].map(i => <div key={i} style={{ width: 10, height: 2, background: "#c9922a", borderRadius: 99, opacity: 0.8 }} />)}
+          <div style={{ width: 4, height: "60%", background: "rgba(201,146,42,0.2)", borderRadius: 99, position: "relative" }}>
+            <div style={{ position: "absolute", top: "50%", left: "50%",
+              transform: "translate(-50%,-50%)",
+              width: 28, height: 52,
+              background: "rgba(201,146,42,0.28)",
+              border: "2px solid rgba(201,146,42,0.6)",
+              borderRadius: 10,
+              display: "flex", alignItems: "center", justifyContent: "center",
+              boxShadow: "0 2px 8px rgba(0,0,0,0.4)" }}>
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                {[0,1,2].map(i => <div key={i} style={{ width: 14, height: 2.5, background: "#c9922a", borderRadius: 99, opacity: 0.9 }} />)}
               </div>
             </div>
           </div>
@@ -677,6 +697,14 @@ function ScanView({ sakes }) {
   const [snapUrl, setSnapUrl] = useState(null);
   const [err, setErr] = useState("");
 
+  // When cameraOn becomes true and video element renders, bind the stream
+  useEffect(() => {
+    if (cameraOn && videoRef.current && streamRef.current) {
+      videoRef.current.srcObject = streamRef.current;
+      videoRef.current.play().catch(() => {});
+    }
+  }, [cameraOn]);
+
   const startCamera = async () => {
     setErr("");
     try {
@@ -684,10 +712,10 @@ function ScanView({ sakes }) {
         video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } }
       });
       streamRef.current = stream;
-      if (videoRef.current) videoRef.current.srcObject = stream;
-      setCameraOn(true);
+      setCameraOn(true); // render <video> first, then useEffect binds stream
     } catch (e) {
       setErr("無法開啟相機，請確認已授權相機權限");
+      console.error("Camera error:", e);
     }
   };
 
