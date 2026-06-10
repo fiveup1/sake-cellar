@@ -1,9 +1,6 @@
 {
   "rewrites": [
     { "source": "/api/(.*)", "destination": "/api/$1" },
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
     { "source": "/(.*)", "destination": "/index.html" }
   ],
   "functions": {
@@ -11,14 +8,4 @@
       "maxDuration": 30
     }
   }
-=======
-=======
->>>>>>> c00bf4ac0c6a14009bf5822bd7af55fb404499c2
-=======
->>>>>>> c00bf4ac0c6a14009bf5822bd7af55fb404499c2
-    { "source": "/share/:path*", "destination": "/index.html" },
-    { "source": "/share-sake/:path*", "destination": "/index.html" },
-    { "source": "/:path*", "destination": "/index.html" }
-  ]
->>>>>>> c00bf4ac0c6a14009bf5822bd7af55fb404499c2
 }
