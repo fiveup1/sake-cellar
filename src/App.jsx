@@ -1676,7 +1676,7 @@ function DetailSheet({ sake, onClose, onDelete, onReanalyze, onSaveBackImage }) 
         <div style={{ padding: "16px 20px 28px" }}>
           {/* 單瓶分享按鈕 */}
           <button id="sake-share-btn" onClick={async () => {
-            const shareUrl = `${window.location.origin}/share-sake/${sake.id}`;
+            const shareUrl = `${window.location.origin}/api/sake/${sake.id}`;
             try { await navigator.clipboard.writeText(shareUrl); } catch {}
             const btn = document.getElementById("sake-share-btn");
             if (btn) { btn.textContent = "✅ 連結已複製！"; setTimeout(() => { if (btn) btn.textContent = "🔗 分享這支酒（唯讀連結）"; }, 2200); }
