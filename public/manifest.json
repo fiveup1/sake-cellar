@@ -1,13 +1,18 @@
 {
-  "name": "酒蔵録 SAKE CELLAR",
-  "short_name": "酒蔵録",
-  "description": "AI 日本酒收藏管理",
+  "name": "鰭跡食刻",
+  "short_name": "鰭跡食刻",
+  "description": "鰭跡地圖・食刻時光・深海棲息圖",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#0e0a06",
-  "theme_color": "#0e0a06",
+  "background_color": "#08142e",
+  "theme_color": "#08142e",
   "orientation": "portrait",
   "icons": [
-    { "src": "/icon.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
   ]
 }
