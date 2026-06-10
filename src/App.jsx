@@ -56,10 +56,10 @@ function AppInner() {
   const bgStopRef = useRef(false);         // 卸載時停止背景預載
   const fileRef = useRef();
 
-  // 初次載入：固定 5 秒內盡量載（至少 20 筆保底），時間到才進酒窖
+  // 初次載入：固定 3 秒內盡量載（至少 20 筆保底），時間到才進酒窖
   useEffect(() => {
     let cancelled = false;
-    const INITIAL_MS = 5000;
+    const INITIAL_MS = 3000;
 
     (async () => {
       const start = Date.now();
@@ -67,7 +67,7 @@ function AppInner() {
       let offset = 0;
       let more = true;
 
-      // 5 秒內連續載入；但至少要載到第一批（20 筆）才結束
+      // 3 秒內連續載入；但至少要載到第一批（20 筆）才結束
       while (!cancelled && more) {
         let batch = [];
         try {
@@ -80,11 +80,11 @@ function AppInner() {
         const elapsed = Date.now() - start;
         // 結束條件：時間到且至少有一批（或沒有更多了）
         if ((elapsed >= INITIAL_MS && buffer.length >= PAGE) || !more) break;
-        // 還沒到 5 秒就全速續載（不間隔）
+        // 還沒到 3 秒就全速續載（不間隔）
       }
 
       if (cancelled) return;
-      // 補足動畫至少播放 5 秒（避免網路太快動畫一閃而過）
+      // 補足動畫至少播放 3 秒（避免網路太快動畫一閃而過）
       const remain = INITIAL_MS - (Date.now() - start);
       if (remain > 0) await new Promise(r => setTimeout(r, remain));
       if (cancelled) return;
@@ -359,34 +359,32 @@ function AppInner() {
       {/* ─── Body ─── */}
       <div style={{ flex: 1, position: "relative", overflow: "hidden", display: "flex" }}>
       <main ref={scrollRef} id="cellar-main" className="no-scrollbar" style={{ flex: 1, overflowY: "auto", padding: "4px 16px", paddingBottom: "calc(96px + env(safe-area-inset-bottom))" }}>
-        {loading ? (
-          <StickmanLoading />
-        ) : (
-          <>
-            {tab === "cellar" && (
-              <CellarView
-                sakes={sakes} filtered={filtered} cats={cats}
-                search={search} setSearch={setSearch}
-                filterCat={filterCat} setFilterCat={setFilterCat}
-                sortBy={sortBy} setSortBy={setSortBy}
-                selected={selected} selectMode={selectMode} setSelectMode={setSelectMode}
-                toggleSelect={toggleSelect} selectAll={selectAll} clearSelect={clearSelect}
-                handleBatchDelete={handleBatchDelete} selectFailed={selectFailed}
-                onOpen={setDetail} onGoImport={() => setTab("import")} onGoCollage={() => setTab("collage")}
-                importing={importing} progress={progress} cancelImport={cancelImport}
-                bgLoading={bgLoading} hasMore={hasMore}
-              />
-            )}
-            {tab === "import" && (
-              <ImportView fileRef={fileRef} onImport={handleImport} importing={importing} progress={progress} cancelImport={cancelImport} sakes={sakes} />
-            )}
-            {tab === "collage" && (
-              <CollageView sakes={sakes} selected={selected} setSelected={setSelected} setSelectMode={setSelectMode} goCellar={() => setTab("cellar")} />
-            )}
-            {tab === "manage" && (
-              <ManageView sakes={sakes} />
-            )}
-          </>
+        {tab === "cellar" && (
+          loading ? (
+            <StickmanLoading />
+          ) : (
+            <CellarView
+              sakes={sakes} filtered={filtered} cats={cats}
+              search={search} setSearch={setSearch}
+              filterCat={filterCat} setFilterCat={setFilterCat}
+              sortBy={sortBy} setSortBy={setSortBy}
+              selected={selected} selectMode={selectMode} setSelectMode={setSelectMode}
+              toggleSelect={toggleSelect} selectAll={selectAll} clearSelect={clearSelect}
+              handleBatchDelete={handleBatchDelete} selectFailed={selectFailed}
+              onOpen={setDetail} onGoImport={() => setTab("import")} onGoCollage={() => setTab("collage")}
+              importing={importing} progress={progress} cancelImport={cancelImport}
+              bgLoading={bgLoading} hasMore={hasMore}
+            />
+          )
+        )}
+        {tab === "import" && (
+          <ImportView fileRef={fileRef} onImport={handleImport} importing={importing} progress={progress} cancelImport={cancelImport} sakes={sakes} />
+        )}
+        {tab === "collage" && (
+          <CollageView sakes={sakes} selected={selected} setSelected={setSelected} setSelectMode={setSelectMode} goCellar={() => setTab("cellar")} />
+        )}
+        {tab === "manage" && (
+          <ManageView sakes={sakes} />
         )}
       </main>
       {/* Big scrubber — only show when cellar tab and enough items */}
@@ -1152,7 +1150,7 @@ function StickmanLoading({ label = "今天又開哪支酒 ?" }) {
         <defs><clipPath id="splashClip"><rect x="0" y="0" width="680" height="260"/></clipPath></defs>
         <style>{`
           @keyframes splashParade { 0%{transform:translateX(-50%)} 100%{transform:translateX(0%)} }
-          .splash-trk { animation: splashParade 16s linear infinite; }
+          .splash-trk { animation: splashParade 6s linear infinite; }
         `}</style>
         <g clipPath="url(#splashClip)">
         <g className="splash-trk">
