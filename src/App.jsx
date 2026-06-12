@@ -40,7 +40,6 @@ function AppInner() {
   const [importing, setImporting] = useState(false);
   const [progress, setProgress] = useState({ done: 0, total: 0 });
   const [hasMore, setHasMore] = useState(true);
-  const [bgLoading, setBgLoading] = useState(false); // 背景預載中
   const PAGE = 20;
   const abortImportRef = useRef(false);
   const scrollRef = useRef(null);
@@ -54,117 +53,45 @@ function AppInner() {
     el.scrollTop = ratio * (el.scrollHeight - el.clientHeight);
   };
   const importingRef = useRef(false);      // 匯入中時暫停背景預載
-  const bgStopRef = useRef(false);         // 卸載時停止背景預載
   const fileRef = useRef();
 
-  // 初次載入：動畫固定 3 秒，同時並行：
-  //   A) 文字優先：fetchSakesTextOnly 把全部文字資料（不含圖片）盡快撈完，搜尋立即可用
-  //   B) 3 秒後進場，再背景補齊圖片 URL（20筆20筆 patch 回 sakes）
+  // 初次載入：動畫固定 3 秒，同時：
+  //   1) 一次撈全部文字（limit:1000，一次來回），3 秒後進場搜尋全庫可用
+  //   2) 進場後背景一次補全部圖片 URL
   useEffect(() => {
     let cancelled = false;
-    const SHOW_MS = 3000;
-    const TEXT_BATCH = 100; // 文字資料每批 100 筆，減少來回次數
 
     (async () => {
-      const start = Date.now();
-      let textBuffer = [];
-      let offset = 0;
-      let more = true;
+      // 文字 + 計時，兩件事並行
+      const [textData] = await Promise.all([
+        fetchSakesTextOnly({ limit: 1000, offset: 0 }).catch(() => []),
+        new Promise(r => setTimeout(r, 3000)),
+      ]);
 
-      // A) 全速撈文字（3 秒內能撈多少算多少）
-      const fetchText = (async () => {
-        while (!cancelled && more) {
-          let batch = [];
-          try { batch = await fetchSakesTextOnly({ limit: TEXT_BATCH, offset }); } catch { more = false; break; }
-          textBuffer = [...textBuffer, ...batch];
-          offset += batch.length;
-          more = batch.length === TEXT_BATCH;
-          if (Date.now() - start >= SHOW_MS) break;
-        }
-      })();
-
-      // B) 動畫計時器：等滿 3 秒
-      await Promise.all([fetchText, new Promise(r => setTimeout(r, SHOW_MS))]);
       if (cancelled) return;
 
-      // 進場：文字資料全部就位，搜尋立即有效
-      setSakes(textBuffer);
-      setHasMore(more);
+      // 進場，搜尋立即全庫可用
+      setSakes(textData);
+      setHasMore(false); // 文字已全部撈完
       setLoading(false);
 
-      // 背景補圖片 URL（20筆一組，逐批 patch，不阻塞 UI）
-      if (textBuffer.length > 0) startImagePreload(textBuffer.map(s => s.id));
-
-      // 如果文字還有更多沒撈完，繼續背景撈（不含圖）
-      if (more) startBackgroundPreload(offset);
+      // 背景一次補全部圖片 URL
+      if (!cancelled && textData.length > 0) {
+        try {
+          const map = await fetchImageUrls(textData.map(s => s.id));
+          if (!cancelled) {
+            setSakes(prev => prev.map(s =>
+              map[s.id] ? { ...s, imageUrl: map[s.id].imageUrl, backImageUrl: map[s.id].backImageUrl } : s
+            ));
+          }
+        } catch {}
+      }
     })();
 
-    return () => { cancelled = true; bgStopRef.current = true; };
+    return () => { cancelled = true; };
   }, []);
 
-  // 背景補圖片：拿到文字資料後，分批去抓 image_url 補回 sakes
-  const startImagePreload = useCallback((allIds) => {
-    const BATCH = 20;
-    let i = 0;
-    const next = async () => {
-      if (bgStopRef.current || i >= allIds.length) return;
-      const chunk = allIds.slice(i, i + BATCH);
-      i += BATCH;
-      try {
-        const map = await fetchImageUrls(chunk);
-        setSakes(prev => prev.map(s => map[s.id]
-          ? { ...s, imageUrl: map[s.id].imageUrl, backImageUrl: map[s.id].backImageUrl }
-          : s
-        ));
-      } catch {}
-      // 下一批：稍微讓一下 UI
-      setTimeout(next, 200);
-    };
-    next();
-  }, []);
 
-  // 背景漸進預載：操作優先，利用瀏覽器空閒時段，一批批載到全部完成
-  const startBackgroundPreload = useCallback((startOffset) => {
-    bgStopRef.current = false;
-    setBgLoading(true);
-    let offset = startOffset;
-
-    const idle = (cb) => {
-      if ("requestIdleCallback" in window) window.requestIdleCallback(cb, { timeout: 2000 });
-      else setTimeout(cb, 300);
-    };
-
-    const loadNext = async () => {
-      if (bgStopRef.current) { setBgLoading(false); return; }
-      // 匯入辨識中 → 暫停背景載入，把資源讓給辨識，稍後再試
-      if (importingRef.current) { setTimeout(loadNext, 2000); return; }
-
-      let batch = [];
-      try {
-        batch = await fetchSakes({ limit: PAGE, offset });
-      } catch { batch = []; }
-
-      if (batch.length > 0) {
-        setSakes(prev => {
-          const ids = new Set(prev.map(s => s.id));
-          const fresh = batch.filter(s => !ids.has(s.id));
-          return [...prev, ...fresh];
-        });
-        offset += batch.length;
-      }
-
-      if (batch.length < PAGE) {
-        // 沒有更多了，背景預載完成
-        setHasMore(false);
-        setBgLoading(false);
-        return;
-      }
-      // 還有更多 → 等空閒 + 間隔後再載下一批（操作優先、禮讓）
-      idle(() => setTimeout(loadNext, 1200));
-    };
-
-    idle(() => setTimeout(loadNext, 800));
-  }, []);
 
   // 計數器動畫：sakes.length 變動時，displayCount 逐一追上去（1,2,3...）
   useEffect(() => {
@@ -409,7 +336,7 @@ function AppInner() {
               handleBatchDelete={handleBatchDelete} selectFailed={selectFailed}
               onOpen={setDetail} onGoImport={() => setTab("import")} onGoCollage={() => setTab("collage")}
               importing={importing} progress={progress} cancelImport={cancelImport}
-              bgLoading={bgLoading} hasMore={hasMore}
+              bgLoading={false} hasMore={hasMore}
             />
           )
         )}
