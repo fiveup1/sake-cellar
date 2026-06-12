@@ -29,6 +29,8 @@ export default function App() {
 function AppInner() {
   const [sakes, setSakes] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadingFade, setLoadingFade] = useState(false); // 動畫 fade-out 中
+  const [imagesReady, setImagesReady] = useState(false); // 文字先顯示，稍後才開放圖片
   const [tab, setTab] = useState("cellar");
   const [search, setSearch] = useState("");
   const [filterCat, setFilterCat] = useState("全部");
@@ -56,10 +58,11 @@ function AppInner() {
   const bgStopRef = useRef(false);         // 卸載時停止背景預載
   const fileRef = useRef();
 
-  // 初次載入：固定 3 秒內盡量載（至少 20 筆保底），時間到才進酒窖
+  // 初次載入：動畫固定播滿 3 秒，同時全速撈資料，能載多少算多少
+  // 流程：3秒動畫 + 並行全速 fetch → 時間到 → fade-out(0.4s) → 文字卡 → 300ms 後開圖片
   useEffect(() => {
     let cancelled = false;
-    const INITIAL_MS = 3000;
+    const SHOW_MS = 3000;
 
     (async () => {
       const start = Date.now();
@@ -67,34 +70,34 @@ function AppInner() {
       let offset = 0;
       let more = true;
 
-      // 3 秒內連續載入；但至少要載到第一批（20 筆）才結束
-      while (!cancelled && more) {
-        let batch = [];
-        try {
-          batch = await fetchSakes({ limit: PAGE, offset });
-        } catch { batch = []; }
-        buffer = buffer.concat(batch);
-        offset += batch.length;
-        more = batch.length === PAGE;
+      // 全速撈：3 秒內連續 fetch，能載多少算多少（不限批次）
+      const fetchAll = (async () => {
+        while (!cancelled && more) {
+          let batch = [];
+          try { batch = await fetchSakes({ limit: PAGE, offset }); } catch { more = false; break; }
+          buffer = [...buffer, ...batch];
+          offset += batch.length;
+          more = batch.length === PAGE;
+          if (Date.now() - start >= SHOW_MS) break;
+        }
+      })();
 
-        const elapsed = Date.now() - start;
-        // 結束條件：時間到且至少有一批（或沒有更多了）
-        if ((elapsed >= INITIAL_MS && buffer.length >= PAGE) || !more) break;
-        // 還沒到 3 秒就全速續載（不間隔）
-      }
+      // 等動畫播滿 3 秒（fetch 同步進行，不互相等待）
+      await Promise.all([fetchAll, new Promise(r => setTimeout(r, SHOW_MS))]);
 
       if (cancelled) return;
-      // 補足動畫至少播放 3 秒（避免網路太快動畫一閃而過）
-      const remain = INITIAL_MS - (Date.now() - start);
-      if (remain > 0) await new Promise(r => setTimeout(r, remain));
-      if (cancelled) return;
 
-      setSakes(buffer);
-      setHasMore(more);
-      setLoading(false);
-
-      // 進酒窖後，啟動「操作優先」的背景漸進預載，把剩下的慢慢補完
-      if (more) startBackgroundPreload(offset);
+      // 進場：fade-out 動畫(0.4s) → 文字卡顯示 → 300ms 後開圖片
+      setLoadingFade(true);
+      setTimeout(() => {
+        if (cancelled) return;
+        setSakes(buffer);
+        setHasMore(more);
+        setLoading(false);
+        setLoadingFade(false);
+        setTimeout(() => { if (!cancelled) setImagesReady(true); }, 300);
+        if (more) startBackgroundPreload(offset);
+      }, 400);
     })();
 
     return () => { cancelled = true; bgStopRef.current = true; };
@@ -360,22 +363,31 @@ function AppInner() {
       <div style={{ flex: 1, position: "relative", overflow: "hidden", display: "flex" }}>
       <main ref={scrollRef} id="cellar-main" className="no-scrollbar" style={{ flex: 1, overflowY: "auto", padding: "4px 16px", paddingBottom: "calc(96px + env(safe-area-inset-bottom))" }}>
         {tab === "cellar" && (
-          loading ? (
-            <StickmanLoading />
-          ) : (
-            <CellarView
-              sakes={sakes} filtered={filtered} cats={cats}
-              search={search} setSearch={setSearch}
-              filterCat={filterCat} setFilterCat={setFilterCat}
-              sortBy={sortBy} setSortBy={setSortBy}
-              selected={selected} selectMode={selectMode} setSelectMode={setSelectMode}
-              toggleSelect={toggleSelect} selectAll={selectAll} clearSelect={clearSelect}
-              handleBatchDelete={handleBatchDelete} selectFailed={selectFailed}
-              onOpen={setDetail} onGoImport={() => setTab("import")} onGoCollage={() => setTab("collage")}
-              importing={importing} progress={progress} cancelImport={cancelImport}
-              bgLoading={bgLoading} hasMore={hasMore}
-            />
-          )
+          <>
+            {/* 載入動畫：loading 中顯示，fade-out 階段也繼續顯示（透明度漸出） */}
+            {(loading || loadingFade) && (
+              <div style={{ opacity: loadingFade ? 0 : 1, transition: "opacity 0.4s ease", pointerEvents: loadingFade ? "none" : "auto" }}>
+                <StickmanLoading />
+              </div>
+            )}
+            {/* 酒窖主體：loading 結束後顯示，文字卡立刻出現，圖片稍後啟用 */}
+            {!loading && (
+              <div style={{ opacity: loadingFade ? 0 : 1, transition: "opacity 0.3s ease" }}>
+                <CellarView
+                  sakes={sakes} filtered={filtered} cats={cats}
+                  search={search} setSearch={setSearch}
+                  filterCat={filterCat} setFilterCat={setFilterCat}
+                  sortBy={sortBy} setSortBy={setSortBy}
+                  selected={selected} selectMode={selectMode} setSelectMode={setSelectMode}
+                  toggleSelect={toggleSelect} selectAll={selectAll} clearSelect={clearSelect}
+                  handleBatchDelete={handleBatchDelete} selectFailed={selectFailed}
+                  onOpen={setDetail} onGoImport={() => setTab("import")} onGoCollage={() => setTab("collage")}
+                  importing={importing} progress={progress} cancelImport={cancelImport}
+                  bgLoading={bgLoading} hasMore={hasMore} imagesReady={imagesReady}
+                />
+              </div>
+            )}
+          </>
         )}
         {tab === "import" && (
           <ImportView fileRef={fileRef} onImport={handleImport} importing={importing} progress={progress} cancelImport={cancelImport} sakes={sakes} />
@@ -468,7 +480,7 @@ function AppInner() {
 function CellarView(props) {
   const { sakes, filtered, cats, search, setSearch, filterCat, setFilterCat, sortBy, setSortBy,
     selected, selectMode, setSelectMode, toggleSelect, selectAll, clearSelect, handleBatchDelete, selectFailed, onOpen, onGoImport, onGoCollage, importing, progress, cancelImport,
-    bgLoading, hasMore } = props;
+    bgLoading, hasMore, imagesReady } = props;
   const gold = "#c9922a";
   const [showSort, setShowSort] = useState(false);
   // 排序選項：依加入時間 / 依價格，各有升降序
@@ -602,7 +614,8 @@ function CellarView(props) {
             {filtered.map(s => (
               <SakeCard key={s.id} sake={s} selected={selected.has(s.id)}
                 selectMode={selectMode || selected.size > 0}
-                onSelect={toggleSelect} onOpen={onOpen} onLongPress={() => setSelectMode(true)} />
+                onSelect={toggleSelect} onOpen={onOpen} onLongPress={() => setSelectMode(true)}
+                imagesReady={imagesReady} />
             ))}
           </div>
           {/* 背景自動載入指示（操作優先，不需手動點） */}
@@ -624,10 +637,11 @@ function CellarView(props) {
 const PAGE_HINT = 20;
 
 // ── 酒卡 ──
-function SakeCard({ sake, selected, selectMode, onSelect, onOpen, onLongPress }) {
+function SakeCard({ sake, selected, selectMode, onSelect, onOpen, onLongPress, imagesReady }) {
   const i = sake.info || {};
   const color = catColor(i.category);
   const pressTimer = useRef();
+  const [imgLoaded, setImgLoaded] = useState(false);
 
   const start = () => { pressTimer.current = setTimeout(onLongPress, 500); };
   const cancel = () => clearTimeout(pressTimer.current);
@@ -649,7 +663,21 @@ function SakeCard({ sake, selected, selectMode, onSelect, onOpen, onLongPress })
       )}
 
       <div style={{ aspectRatio: "3/4", overflow: "hidden", background: "#0a0704", position: "relative" }}>
-        {sake.imageUrl && <img src={sake.imageUrl} alt="" loading="lazy" decoding="async" style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
+        {/* 骨架佔位：圖片還沒 ready 或還沒載完時顯示 */}
+        {sake.imageUrl && (!imagesReady || !imgLoaded) && (
+          <div style={{ position: "absolute", inset: 0, background: "linear-gradient(90deg, #1a1208 0%, #2a1e0a 40%, #332308 50%, #2a1e0a 60%, #1a1208 100%)", backgroundSize: "200% 100%", animation: "shimmer 1.8s linear infinite" }} />
+        )}
+        {/* 圖片：imagesReady 後才真正載入（src 才被設定） */}
+        {sake.imageUrl && imagesReady && (
+          <img
+            src={sake.imageUrl}
+            alt=""
+            loading="lazy"
+            decoding="async"
+            onLoad={() => setImgLoaded(true)}
+            style={{ width: "100%", height: "100%", objectFit: "cover", opacity: imgLoaded ? 1 : 0, transition: "opacity 0.3s ease" }}
+          />
+        )}
         {sake.status === "analyzing" && (
           <div style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.65)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8 }}>
             <div style={{ width: 26, height: 26, border: `2.5px solid ${gold}44`, borderTop: `2.5px solid ${gold}`, borderRadius: "50%", animation: "spin 1s linear infinite" }} />
