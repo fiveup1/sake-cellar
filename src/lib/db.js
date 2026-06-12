@@ -29,6 +29,47 @@ export async function fetchSakes({ limit = 20, offset = 0 } = {}) {
   } catch { return []; }
 }
 
+// 初次載入專用：只撈文字欄位（不含圖片），速度更快，搜尋立即可用
+export async function fetchSakesTextOnly({ limit = 100, offset = 0 } = {}) {
+  if (hasSupabase) {
+    const { data, error } = await supabase
+      .from("sakes")
+      .select("id, info, added_at")
+      .order("added_at", { ascending: false })
+      .range(offset, offset + limit - 1);
+    if (error) { console.error(error); return []; }
+    return (data || []).map(r => ({
+      id: r.id,
+      imageUrl: null,       // 先留空，背景補
+      backImageUrl: null,
+      info: r.info,
+      status: "done",
+      addedAt: r.added_at,
+    }));
+  }
+  // localStorage 模式：直接用現有資料
+  try {
+    const d = localStorage.getItem(LOCAL_KEY);
+    const all = d ? JSON.parse(d) : [];
+    return all.slice(offset, offset + limit).map(s => ({ ...s, imageUrl: null }));
+  } catch { return []; }
+}
+
+// 背景補圖：給一組 id，回傳 { id -> imageUrl } 對照表
+export async function fetchImageUrls(ids) {
+  if (!hasSupabase || !ids.length) return {};
+  const { data, error } = await supabase
+    .from("sakes")
+    .select("id, image_url, back_image_url")
+    .in("id", ids);
+  if (error) { console.error(error); return {}; }
+  const map = {};
+  for (const r of (data || [])) {
+    map[r.id] = { imageUrl: r.image_url, backImageUrl: r.back_image_url || null };
+  }
+  return map;
+}
+
 // 備份用：一次撈全部
 export async function fetchAllSakes() {
   if (hasSupabase) {

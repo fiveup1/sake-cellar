@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import { fetchSakes, fetchAllSakes, insertSake, updateSake, deleteSake, hasSupabase, uploadBackImage, createShareToken, getShareToken, deleteShareToken, fetchSakesPublic, fetchAllSakesPublic, verifyShareToken, fetchSakeByIdPublic } from "./lib/db";
+import { fetchSakes, fetchSakesTextOnly, fetchImageUrls, fetchAllSakes, insertSake, updateSake, deleteSake, hasSupabase, uploadBackImage, createShareToken, getShareToken, deleteShareToken, fetchSakesPublic, fetchAllSakesPublic, verifyShareToken, fetchSakeByIdPublic } from "./lib/db";
 import { analyzeImage, compressImage, urlToBase64 } from "./lib/analyze";
 import { extractExif, reverseGeocode } from "./lib/exif";
 import { buildTidyCollage, buildScatteredCollage, downloadDataUrl } from "./lib/collage";
@@ -29,6 +29,7 @@ export default function App() {
 function AppInner() {
   const [sakes, setSakes] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [displayCount, setDisplayCount] = useState(0); // 頭部「蔵 XX 本」逐一遞增用
   const [tab, setTab] = useState("cellar");
   const [search, setSearch] = useState("");
   const [filterCat, setFilterCat] = useState("全部");
@@ -56,48 +57,70 @@ function AppInner() {
   const bgStopRef = useRef(false);         // 卸載時停止背景預載
   const fileRef = useRef();
 
-  // 初次載入：固定 3 秒內盡量載（至少 20 筆保底），時間到才進酒窖
+  // 初次載入：動畫固定 3 秒，同時並行：
+  //   A) 文字優先：fetchSakesTextOnly 把全部文字資料（不含圖片）盡快撈完，搜尋立即可用
+  //   B) 3 秒後進場，再背景補齊圖片 URL（20筆20筆 patch 回 sakes）
   useEffect(() => {
     let cancelled = false;
-    const INITIAL_MS = 3000;
+    const SHOW_MS = 3000;
+    const TEXT_BATCH = 100; // 文字資料每批 100 筆，減少來回次數
 
     (async () => {
       const start = Date.now();
-      let buffer = [];
+      let textBuffer = [];
       let offset = 0;
       let more = true;
 
-      // 3 秒內連續載入；但至少要載到第一批（20 筆）才結束
-      while (!cancelled && more) {
-        let batch = [];
-        try {
-          batch = await fetchSakes({ limit: PAGE, offset });
-        } catch { batch = []; }
-        buffer = buffer.concat(batch);
-        offset += batch.length;
-        more = batch.length === PAGE;
+      // A) 全速撈文字（3 秒內能撈多少算多少）
+      const fetchText = (async () => {
+        while (!cancelled && more) {
+          let batch = [];
+          try { batch = await fetchSakesTextOnly({ limit: TEXT_BATCH, offset }); } catch { more = false; break; }
+          textBuffer = [...textBuffer, ...batch];
+          offset += batch.length;
+          more = batch.length === TEXT_BATCH;
+          if (Date.now() - start >= SHOW_MS) break;
+        }
+      })();
 
-        const elapsed = Date.now() - start;
-        // 結束條件：時間到且至少有一批（或沒有更多了）
-        if ((elapsed >= INITIAL_MS && buffer.length >= PAGE) || !more) break;
-        // 還沒到 3 秒就全速續載（不間隔）
-      }
-
-      if (cancelled) return;
-      // 補足動畫至少播放 3 秒（避免網路太快動畫一閃而過）
-      const remain = INITIAL_MS - (Date.now() - start);
-      if (remain > 0) await new Promise(r => setTimeout(r, remain));
+      // B) 動畫計時器：等滿 3 秒
+      await Promise.all([fetchText, new Promise(r => setTimeout(r, SHOW_MS))]);
       if (cancelled) return;
 
-      setSakes(buffer);
+      // 進場：文字資料全部就位，搜尋立即有效
+      setSakes(textBuffer);
       setHasMore(more);
       setLoading(false);
 
-      // 進酒窖後，啟動「操作優先」的背景漸進預載，把剩下的慢慢補完
+      // 背景補圖片 URL（20筆一組，逐批 patch，不阻塞 UI）
+      if (textBuffer.length > 0) startImagePreload(textBuffer.map(s => s.id));
+
+      // 如果文字還有更多沒撈完，繼續背景撈（不含圖）
       if (more) startBackgroundPreload(offset);
     })();
 
     return () => { cancelled = true; bgStopRef.current = true; };
+  }, []);
+
+  // 背景補圖片：拿到文字資料後，分批去抓 image_url 補回 sakes
+  const startImagePreload = useCallback((allIds) => {
+    const BATCH = 20;
+    let i = 0;
+    const next = async () => {
+      if (bgStopRef.current || i >= allIds.length) return;
+      const chunk = allIds.slice(i, i + BATCH);
+      i += BATCH;
+      try {
+        const map = await fetchImageUrls(chunk);
+        setSakes(prev => prev.map(s => map[s.id]
+          ? { ...s, imageUrl: map[s.id].imageUrl, backImageUrl: map[s.id].backImageUrl }
+          : s
+        ));
+      } catch {}
+      // 下一批：稍微讓一下 UI
+      setTimeout(next, 200);
+    };
+    next();
   }, []);
 
   // 背景漸進預載：操作優先，利用瀏覽器空閒時段，一批批載到全部完成
@@ -143,7 +166,20 @@ function AppInner() {
     idle(() => setTimeout(loadNext, 800));
   }, []);
 
-  // ── 篩選 / 排序 ──
+  // 計數器動畫：sakes.length 變動時，displayCount 逐一追上去（1,2,3...）
+  useEffect(() => {
+    const target = sakes.length;
+    if (target === 0) { setDisplayCount(0); return; }
+    // 每次跳一格，速度依差距自動調整（差很多時快一點）
+    const diff = target - displayCount;
+    if (diff <= 0) { setDisplayCount(target); return; }
+    const step = Math.ceil(diff / 12); // 最多 12 步追完
+    const delay = Math.max(16, Math.min(60, 400 / diff)); // 16~60ms per step
+    const t = setTimeout(() => {
+      setDisplayCount(prev => Math.min(prev + step, target));
+    }, delay);
+    return () => clearTimeout(t);
+  }, [sakes.length, displayCount]);
   const cats = useMemo(() => ["全部", ...new Set(sakes.map(s => s.info?.category).filter(Boolean))], [sakes]);
 
   const filtered = useMemo(() => {
@@ -346,7 +382,7 @@ function AppInner() {
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <div>
             <div className="mincho" style={{ fontSize: 26, fontWeight: 800, color: gold, letterSpacing: 4, lineHeight: 1 }}>酒蔵録</div>
-            <div style={{ fontSize: 10, color: "#6a5d45", letterSpacing: 3, marginTop: 5 }}>SAKE CELLAR · 蔵 {sakes.length} 本</div>
+            <div style={{ fontSize: 10, color: "#6a5d45", letterSpacing: 3, marginTop: 5 }}>SAKE CELLAR · 蔵 {displayCount} 本</div>
           </div>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             {!hasSupabase && (
