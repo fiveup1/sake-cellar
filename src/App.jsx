@@ -87,14 +87,18 @@ function AppInner() {
 
       if (cancelled) return;
 
-      // 進場：fade-out 動畫(0.4s) → 文字卡顯示 → 300ms 後開圖片
+      // 進場：
+      // 1. 先把資料寫入 state（此時 loading 還是 true，畫面還在動畫）
+      setSakes(buffer);
+      setHasMore(more);
+      // 2. 觸發 fade-out（資料已就位，搜尋此刻就可用）
       setLoadingFade(true);
       setTimeout(() => {
         if (cancelled) return;
-        setSakes(buffer);
-        setHasMore(more);
+        // 3. 400ms 後動畫淡出完成，切換到酒窖畫面
         setLoading(false);
         setLoadingFade(false);
+        // 4. 再等 300ms 讓文字卡 DOM 渲染完，才開放圖片載入
         setTimeout(() => { if (!cancelled) setImagesReady(true); }, 300);
         if (more) startBackgroundPreload(offset);
       }, 400);
