@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import { fetchSakes, fetchAllSakes, insertSake, updateSake, deleteSake, hasSupabase, uploadBackImage, createShareToken, getShareToken, deleteShareToken, fetchSakesPublic, fetchAllSakesPublic, verifyShareToken, fetchSakeByIdPublic } from "./lib/db";
+import { fetchSakes, fetchSakesTextOnly, fetchImageUrls, fetchAllSakes, insertSake, updateSake, deleteSake, hasSupabase, uploadBackImage, createShareToken, getShareToken, deleteShareToken, fetchSakesPublic, fetchAllSakesPublic, verifyShareToken, fetchSakeByIdPublic } from "./lib/db";
 import { analyzeImage, compressImage, urlToBase64 } from "./lib/analyze";
 import { extractExif, reverseGeocode } from "./lib/exif";
 import { buildTidyCollage, buildScatteredCollage, downloadDataUrl } from "./lib/collage";
@@ -23,8 +23,6 @@ export default function App() {
   if (shareMatch) return <SharedCellar token={shareMatch[1]} />;
   const sakeSingleMatch = path.match(/^\/share-sake\/(.+)$/i);
   if (sakeSingleMatch) {
-    // URL 格式：/share-sake/酒名_UUID 或舊格式 /share-sake/UUID
-    // 永遠取最後一個 _ 後面的部分作為真正的 sakeId
     const slug = sakeSingleMatch[1];
     const lastUnderscore = slug.lastIndexOf("_");
     const sakeId = lastUnderscore >= 0 ? slug.slice(lastUnderscore + 1) : slug;
@@ -36,6 +34,7 @@ export default function App() {
 function AppInner() {
   const [sakes, setSakes] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [displayCount, setDisplayCount] = useState(0); // 頭部「蔵 XX 本」逐一遞增用
   const [tab, setTab] = useState("cellar");
   const [search, setSearch] = useState("");
   const [filterCat, setFilterCat] = useState("全部");
@@ -46,7 +45,6 @@ function AppInner() {
   const [importing, setImporting] = useState(false);
   const [progress, setProgress] = useState({ done: 0, total: 0 });
   const [hasMore, setHasMore] = useState(true);
-  const [bgLoading, setBgLoading] = useState(false); // 背景預載中
   const PAGE = 20;
   const abortImportRef = useRef(false);
   const scrollRef = useRef(null);
@@ -60,97 +58,60 @@ function AppInner() {
     el.scrollTop = ratio * (el.scrollHeight - el.clientHeight);
   };
   const importingRef = useRef(false);      // 匯入中時暫停背景預載
-  const bgStopRef = useRef(false);         // 卸載時停止背景預載
   const fileRef = useRef();
 
-  // 初次載入：固定 3 秒內盡量載（至少 20 筆保底），時間到才進酒窖
+  // 初次載入：動畫固定 3 秒，同時：
+  //   1) 一次撈全部文字（limit:1000，一次來回），3 秒後進場搜尋全庫可用
+  //   2) 進場後背景一次補全部圖片 URL
   useEffect(() => {
     let cancelled = false;
-    const INITIAL_MS = 3000;
 
     (async () => {
-      const start = Date.now();
-      let buffer = [];
-      let offset = 0;
-      let more = true;
-
-      // 3 秒內連續載入；但至少要載到第一批（20 筆）才結束
-      while (!cancelled && more) {
-        let batch = [];
-        try {
-          batch = await fetchSakes({ limit: PAGE, offset });
-        } catch { batch = []; }
-        buffer = buffer.concat(batch);
-        offset += batch.length;
-        more = batch.length === PAGE;
-
-        const elapsed = Date.now() - start;
-        // 結束條件：時間到且至少有一批（或沒有更多了）
-        if ((elapsed >= INITIAL_MS && buffer.length >= PAGE) || !more) break;
-        // 還沒到 3 秒就全速續載（不間隔）
-      }
+      // 文字 + 計時，兩件事並行
+      const [textData] = await Promise.all([
+        fetchSakesTextOnly({ limit: 1000, offset: 0 }).catch(() => []),
+        new Promise(r => setTimeout(r, 3000)),
+      ]);
 
       if (cancelled) return;
-      // 補足動畫至少播放 3 秒（避免網路太快動畫一閃而過）
-      const remain = INITIAL_MS - (Date.now() - start);
-      if (remain > 0) await new Promise(r => setTimeout(r, remain));
-      if (cancelled) return;
 
-      setSakes(buffer);
-      setHasMore(more);
+      // 進場，搜尋立即全庫可用
+      setSakes(textData);
+      setHasMore(false); // 文字已全部撈完
       setLoading(false);
 
-      // 進酒窖後，啟動「操作優先」的背景漸進預載，把剩下的慢慢補完
-      if (more) startBackgroundPreload(offset);
+      // 背景一次補全部圖片 URL
+      if (!cancelled && textData.length > 0) {
+        try {
+          const map = await fetchImageUrls(textData.map(s => s.id));
+          if (!cancelled) {
+            setSakes(prev => prev.map(s =>
+              map[s.id] ? { ...s, imageUrl: map[s.id].imageUrl, backImageUrl: map[s.id].backImageUrl } : s
+            ));
+          }
+        } catch {}
+      }
     })();
 
-    return () => { cancelled = true; bgStopRef.current = true; };
+    return () => { cancelled = true; };
   }, []);
 
-  // 背景漸進預載：操作優先，利用瀏覽器空閒時段，一批批載到全部完成
-  const startBackgroundPreload = useCallback((startOffset) => {
-    bgStopRef.current = false;
-    setBgLoading(true);
-    let offset = startOffset;
 
-    const idle = (cb) => {
-      if ("requestIdleCallback" in window) window.requestIdleCallback(cb, { timeout: 2000 });
-      else setTimeout(cb, 300);
-    };
 
-    const loadNext = async () => {
-      if (bgStopRef.current) { setBgLoading(false); return; }
-      // 匯入辨識中 → 暫停背景載入，把資源讓給辨識，稍後再試
-      if (importingRef.current) { setTimeout(loadNext, 2000); return; }
-
-      let batch = [];
-      try {
-        batch = await fetchSakes({ limit: PAGE, offset });
-      } catch { batch = []; }
-
-      if (batch.length > 0) {
-        setSakes(prev => {
-          const ids = new Set(prev.map(s => s.id));
-          const fresh = batch.filter(s => !ids.has(s.id));
-          return [...prev, ...fresh];
-        });
-        offset += batch.length;
-      }
-
-      if (batch.length < PAGE) {
-        // 沒有更多了，背景預載完成
-        setHasMore(false);
-        setBgLoading(false);
-        return;
-      }
-      // 還有更多 → 等空閒 + 間隔後再載下一批（操作優先、禮讓）
-      idle(() => setTimeout(loadNext, 1200));
-    };
-
-    idle(() => setTimeout(loadNext, 800));
-  }, []);
-
-  // ── 篩選 / 排序 ──
+  // 計數器動畫：sakes.length 變動時，displayCount 逐一追上去（1,2,3...）
+  useEffect(() => {
+    const target = sakes.length;
+    if (target === 0) { setDisplayCount(0); return; }
+    // 每次跳一格，速度依差距自動調整（差很多時快一點）
+    const diff = target - displayCount;
+    if (diff <= 0) { setDisplayCount(target); return; }
+    const step = Math.ceil(diff / 12); // 最多 12 步追完
+    const delay = Math.max(16, Math.min(60, 400 / diff)); // 16~60ms per step
+    const t = setTimeout(() => {
+      setDisplayCount(prev => Math.min(prev + step, target));
+    }, delay);
+    return () => clearTimeout(t);
+  }, [sakes.length, displayCount]);
   const cats = useMemo(() => ["全部", ...new Set(sakes.map(s => s.info?.category).filter(Boolean))], [sakes]);
 
   const filtered = useMemo(() => {
@@ -353,7 +314,7 @@ function AppInner() {
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <div>
             <div className="mincho" style={{ fontSize: 26, fontWeight: 800, color: gold, letterSpacing: 4, lineHeight: 1 }}>酒蔵録</div>
-            <div style={{ fontSize: 10, color: "#6a5d45", letterSpacing: 3, marginTop: 5 }}>SAKE CELLAR · 蔵 {sakes.length} 本</div>
+            <div style={{ fontSize: 10, color: "#6a5d45", letterSpacing: 3, marginTop: 5 }}>SAKE CELLAR · 蔵 {displayCount} 本</div>
           </div>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             {!hasSupabase && (
@@ -380,7 +341,7 @@ function AppInner() {
               handleBatchDelete={handleBatchDelete} selectFailed={selectFailed}
               onOpen={setDetail} onGoImport={() => setTab("import")} onGoCollage={() => setTab("collage")}
               importing={importing} progress={progress} cancelImport={cancelImport}
-              bgLoading={bgLoading} hasMore={hasMore}
+              bgLoading={false} hasMore={hasMore}
             />
           )
         )}
@@ -1654,7 +1615,6 @@ function DetailSheet({ sake, onClose, onDelete, onReanalyze, onSaveBackImage }) 
         <div style={{ padding: "16px 20px 28px" }}>
           {/* 單瓶分享按鈕 */}
           <button id="sake-share-btn" onClick={async () => {
-            // 酒名處理：去掉不適合放 URL 的字元，空格/斜線換成連字號
             const rawName = (sake.info?.name || "").replace(/[\/\\?#]/g, "").replace(/\s+/g, "-").trim();
             const slug = rawName ? `${rawName}_${sake.id}` : sake.id;
             const shareUrl = `${window.location.origin}/share-sake/${slug}`;
