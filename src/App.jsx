@@ -1278,7 +1278,7 @@ function ManageView({ sakes }) {
       <a href="https://www.saketime.jp/ranking/" target="_blank" rel="noopener noreferrer"
         style={{ display: "flex", alignItems: "center", justifyContent: "space-between",
           background: "rgba(201,146,42,0.08)", border: "1px solid rgba(201,146,42,0.3)",
-          borderRadius: 12, padding: "13px 16px", marginBottom: 20, textDecoration: "none",
+          borderRadius: 12, padding: "13px 16px", marginBottom: 10, textDecoration: "none",
           color: gold, transition: "background .15s" }}
         onMouseEnter={e => e.currentTarget.style.background = "rgba(201,146,42,0.15)"}
         onMouseLeave={e => e.currentTarget.style.background = "rgba(201,146,42,0.08)"}
@@ -1288,6 +1288,25 @@ function ManageView({ sakes }) {
           <div>
             <div style={{ fontSize: 14, fontWeight: 700, letterSpacing: 1 }}>Saketime 排名</div>
             <div style={{ fontSize: 11, color: "#8a7055", marginTop: 2 }}>saketime.jp · 日本酒人氣排行榜</div>
+          </div>
+        </div>
+        <span style={{ fontSize: 18, opacity: 0.6 }}>↗</span>
+      </a>
+
+      {/* Sake Competition 得獎連結 */}
+      <a href="https://sakecompetition.com/award.html" target="_blank" rel="noopener noreferrer"
+        style={{ display: "flex", alignItems: "center", justifyContent: "space-between",
+          background: "rgba(201,146,42,0.08)", border: "1px solid rgba(201,146,42,0.3)",
+          borderRadius: 12, padding: "13px 16px", marginBottom: 20, textDecoration: "none",
+          color: gold, transition: "background .15s" }}
+        onMouseEnter={e => e.currentTarget.style.background = "rgba(201,146,42,0.15)"}
+        onMouseLeave={e => e.currentTarget.style.background = "rgba(201,146,42,0.08)"}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <span style={{ fontSize: 22 }}>🥇</span>
+          <div>
+            <div style={{ fontSize: 14, fontWeight: 700, letterSpacing: 1 }}>Sake Competition</div>
+            <div style={{ fontSize: 11, color: "#8a7055", marginTop: 2 }}>sakecompetition.com · 日本酒品評會得獎酒</div>
           </div>
         </div>
         <span style={{ fontSize: 18, opacity: 0.6 }}>↗</span>
