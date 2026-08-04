@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { fetchSakes, fetchSakesTextOnly, fetchImageUrls, fetchAllSakes, insertSake, updateSake, deleteSake, hasSupabase, uploadBackImage, createShareToken, getShareToken, deleteShareToken, fetchSakesPublic, fetchAllSakesPublic, verifyShareToken, fetchSakeByIdPublic } from "./lib/db";
 import { analyzeImage, compressImage, urlToBase64 } from "./lib/analyze";
 import { extractExif, reverseGeocode } from "./lib/exif";
-import { buildTidyCollage, buildScatteredCollage, downloadDataUrl } from "./lib/collage";
+import { buildTidyCollage, buildScatteredCollage, saveCollage } from "./lib/collage";
 import TasteMap from "./components/TasteMap";
 import TempScale from "./components/TempScale";
 
@@ -964,6 +964,27 @@ function CollageView({ sakes, selected, setSelected, setSelectMode, goCellar }) 
   const [results, setResults] = useState([]); // multi mode
   const [building, setBuilding] = useState(false);
   const [seed, setSeed] = useState(1);
+  const [saving, setSaving] = useState(false);
+  const [saveTip, setSaveTip] = useState("");
+  const [longPressUrl, setLongPressUrl] = useState(null); // iOS 無法自動下載時的備援
+
+  // 儲存拼接圖（相容 iOS / PWA）
+  const handleSave = async (dataUrl, filename) => {
+    if (!dataUrl || saving) return;
+    setSaving(true);
+    setSaveTip("");
+    try {
+      const r = await saveCollage(dataUrl, filename);
+      if (r.status === "longpress") setLongPressUrl(r.url);
+      else if (r.status === "downloaded") setSaveTip("已下載到裝置");
+      else if (r.status === "shared") setSaveTip("已開啟分享，可存到「照片」");
+      else if (r.status === "error") setSaveTip("儲存失敗，請再試一次");
+    } catch (e) {
+      console.error(e);
+      setSaveTip("儲存失敗，請再試一次");
+    }
+    setSaving(false);
+  };
 
   const chosen = sakes.filter(s => selected.has(s.id) && s.imageUrl);
   const overLimit = mode === "single" && chosen.length > COLLAGE_MAX;
@@ -1082,8 +1103,8 @@ function CollageView({ sakes, selected, setSelected, setSelectMode, goCellar }) 
                   <div style={{ aspectRatio: "1", borderRadius: 14, overflow: "hidden", background: "#0a0704", border: "1px solid var(--line)", marginBottom: 8 }}>
                     <img src={r} alt={`collage-${i}`} style={{ width: "100%", height: "100%", objectFit: "contain" }} />
                   </div>
-                  <button onClick={() => downloadDataUrl(r, `sake-cellar-${layout}-${i+1}-${Date.now()}.jpg`)} style={{ width: "100%", background: `linear-gradient(135deg,${gold},#e8b84b)`, border: "none", color: "#0e0a06", borderRadius: 12, padding: "11px", fontSize: 13, fontWeight: 700 }}>
-                    ⬇ 儲存第 {i + 1} 張
+                  <button disabled={saving} onClick={() => handleSave(r, `sake-cellar-${layout}-${i+1}-${Date.now()}.jpg`)} style={{ width: "100%", background: saving ? "#333" : `linear-gradient(135deg,${gold},#e8b84b)`, border: "none", color: saving ? "#666" : "#0e0a06", borderRadius: 12, padding: "11px", fontSize: 13, fontWeight: 700 }}>
+                    {saving ? "處理中…" : `⬇ 儲存第 ${i + 1} 張`}
                   </button>
                 </div>
               ))}
@@ -1096,15 +1117,32 @@ function CollageView({ sakes, selected, setSelected, setSelectMode, goCellar }) 
               {layout === "scattered" && (
                 <button onClick={() => setSeed(s => s + 1)} style={{ padding: "13px 16px", background: "rgba(255,255,255,0.05)", border: "1px solid var(--line)", borderRadius: 12, color: "#aaa", fontSize: 13 }}>🎲 換排列</button>
               )}
-              <button disabled={!result || building} onClick={() => downloadDataUrl(result, `sake-cellar-${layout}-${Date.now()}.jpg`)} style={{ flex: 1, background: result && !building ? `linear-gradient(135deg,${gold},#e8b84b)` : "#333", border: "none", color: result && !building ? "#0e0a06" : "#666", borderRadius: 12, padding: "13px", fontSize: 14, fontWeight: 700 }}>
-                ⬇ 儲存拼接圖
+              <button disabled={!result || building || saving} onClick={() => handleSave(result, `sake-cellar-${layout}-${Date.now()}.jpg`)} style={{ flex: 1, background: result && !building && !saving ? `linear-gradient(135deg,${gold},#e8b84b)` : "#333", border: "none", color: result && !building && !saving ? "#0e0a06" : "#666", borderRadius: 12, padding: "13px", fontSize: 14, fontWeight: 700 }}>
+                {saving ? "處理中…" : "⬇ 儲存拼接圖"}
               </button>
             </div>
           )}
-          <div style={{ fontSize: 11, color: "#5a5042", textAlign: "center", marginTop: 12 }}>
-            儲存後可長按圖片存到相簿，或直接分享
+          <div style={{ fontSize: 11, color: saveTip ? gold : "#5a5042", textAlign: "center", marginTop: 12 }}>
+            {saveTip || "iPhone 會跳出分享面板，選「儲存影像」即可存進相簿"}
           </div>
         </>
+      )}
+
+      {/* 備援：無法自動下載時，顯示大圖讓使用者長按儲存 */}
+      {longPressUrl && (
+        <div
+          onClick={() => setLongPressUrl(null)}
+          style={{ position: "fixed", inset: 0, zIndex: 999, background: "rgba(0,0,0,0.92)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 20, gap: 14 }}
+        >
+          <div style={{ fontSize: 13, color: gold, textAlign: "center" }}>長按下方圖片 → 儲存影像</div>
+          <img
+            src={longPressUrl}
+            alt="collage"
+            onClick={(e) => e.stopPropagation()}
+            style={{ maxWidth: "100%", maxHeight: "72vh", borderRadius: 12, WebkitTouchCallout: "default", WebkitUserSelect: "auto", userSelect: "auto" }}
+          />
+          <button style={{ background: "rgba(255,255,255,0.08)", border: "1px solid var(--line)", color: "#bba080", borderRadius: 99, padding: "9px 22px", fontSize: 13 }}>關閉</button>
+        </div>
       )}
     </div>
   );

@@ -192,9 +192,86 @@ function drawWatermark(ctx) {
   ctx.restore();
 }
 
+// ── 儲存 / 分享 ──────────────────────────────────────────────
+export function isIOS() {
+  const ua = navigator.userAgent || "";
+  return /iPad|iPhone|iPod/.test(ua) ||
+    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+}
+
+export function dataUrlToBlob(dataUrl) {
+  const comma = dataUrl.indexOf(",");
+  const head = dataUrl.slice(0, comma);
+  const body = dataUrl.slice(comma + 1);
+  const mime = (head.match(/:(.*?);/) || [, "image/jpeg"])[1];
+  const bin = atob(body);
+  const u8 = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+  return new Blob([u8], { type: mime });
+}
+
+/**
+ * 儲存拼接圖。回傳 { status, url? }
+ *   shared     → 已叫出系統分享面板（iOS 可直接存到「照片」）
+ *   cancelled  → 使用者取消分享
+ *   downloaded → 已觸發瀏覽器下載
+ *   longpress  → 無法自動下載，請 UI 顯示大圖讓使用者長按儲存（附 url）
+ *   error      → 失敗
+ *
+ * 注意：navigator.share 必須在使用者手勢的同一個 tick 呼叫，
+ * 所以這個函式在 share 之前不做任何 await。
+ */
+export async function saveCollage(dataUrl, filename = "sake-collage.jpg") {
+  if (!dataUrl) return { status: "error" };
+
+  let blob;
+  try {
+    blob = dataUrlToBlob(dataUrl);
+  } catch (e) {
+    console.error("[collage] dataUrl 轉檔失敗", e);
+    return { status: "error" };
+  }
+
+  // 1) 系統分享（iOS / Android PWA 的正解）
+  try {
+    const file = new File([blob], filename, { type: blob.type });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      await navigator.share({ files: [file], title: "酒蔵録 拼接圖" });
+      return { status: "shared" };
+    }
+  } catch (e) {
+    if (e && e.name === "AbortError") return { status: "cancelled" };
+    console.warn("[collage] 分享失敗，改用下載", e);
+  }
+
+  // 2) 桌機 / Android Chrome：blob URL + <a download>
+  //    （iOS 不支援 download 屬性，直接跳過）
+  const canDownload = "download" in document.createElement("a") && !isIOS();
+  if (canDownload) {
+    try {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      a.rel = "noopener";
+      a.style.display = "none";
+      document.body.appendChild(a); // Firefox 需要真的掛進 DOM
+      a.click();
+      setTimeout(() => {
+        a.remove();
+        URL.revokeObjectURL(url);
+      }, 15000);
+      return { status: "downloaded" };
+    } catch (e) {
+      console.error("[collage] 下載失敗", e);
+    }
+  }
+
+  // 3) 最後手段：交給 UI 顯示大圖，使用者長按儲存
+  return { status: "longpress", url: dataUrl };
+}
+
+// 舊名稱保留（同步呼叫也能運作）
 export function downloadDataUrl(dataUrl, filename = "sake-collage.jpg") {
-  const a = document.createElement("a");
-  a.href = dataUrl;
-  a.download = filename;
-  a.click();
+  return saveCollage(dataUrl, filename);
 }
