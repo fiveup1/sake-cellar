@@ -69,7 +69,7 @@ function AppInner() {
     (async () => {
       // 文字 + 計時，兩件事並行
       const [textData] = await Promise.all([
-        fetchSakesTextOnly({ limit: 1000, offset: 0 }).catch(() => []),
+        fetchSakesTextOnly().catch(() => []),  // 自動分頁，無筆數上限
         new Promise(r => setTimeout(r, 3000)),
       ]);
 
