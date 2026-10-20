@@ -61,15 +61,33 @@ function AppInner() {
   const fileRef = useRef();
 
   // 初次載入：動畫固定 3 秒，同時：
-  //   1) 一次撈全部文字（limit:1000，一次來回），3 秒後進場搜尋全庫可用
+  //   1) 分頁迴圈撈「全部」文字（Supabase 單次上限 1000 筆，故必須一批批撈到完），
+  //      3 秒後進場搜尋全庫可用
   //   2) 進場後背景一次補全部圖片 URL
   useEffect(() => {
     let cancelled = false;
 
+    // 分頁撈全部文字，突破 Supabase 1000 筆上限
+    const fetchAllText = async () => {
+      const BATCH = 1000;
+      let all = [];
+      let offset = 0;
+      while (true) {
+        let batch = [];
+        try {
+          batch = await fetchSakesTextOnly({ limit: BATCH, offset });
+        } catch { batch = []; }
+        all = all.concat(batch);
+        if (batch.length < BATCH) break; // 不足一批代表撈完
+        offset += BATCH;
+      }
+      return all;
+    };
+
     (async () => {
       // 文字 + 計時，兩件事並行
       const [textData] = await Promise.all([
-        fetchSakesTextOnly({ limit: 1000, offset: 0 }).catch(() => []),
+        fetchAllText(),
         new Promise(r => setTimeout(r, 3000)),
       ]);
 
@@ -80,11 +98,15 @@ function AppInner() {
       setHasMore(false); // 文字已全部撈完
       setLoading(false);
 
-      // 背景一次補全部圖片 URL
+      // 背景分批補圖片 URL（fetchImageUrls 的 in() 查詢同樣有 1000 筆上限，故分批）
       if (!cancelled && textData.length > 0) {
         try {
-          const map = await fetchImageUrls(textData.map(s => s.id));
-          if (!cancelled) {
+          const ids = textData.map(s => s.id);
+          const CHUNK = 500;
+          for (let i = 0; i < ids.length && !cancelled; i += CHUNK) {
+            const slice = ids.slice(i, i + CHUNK);
+            const map = await fetchImageUrls(slice);
+            if (cancelled) break;
             setSakes(prev => prev.map(s =>
               map[s.id] ? { ...s, imageUrl: map[s.id].imageUrl, backImageUrl: map[s.id].backImageUrl } : s
             ));
