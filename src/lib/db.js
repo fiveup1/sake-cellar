@@ -30,25 +30,15 @@ export async function fetchSakes({ limit = 20, offset = 0 } = {}) {
 }
 
 // 初次載入專用：只撈文字欄位（不含圖片），速度更快，搜尋立即可用
-// 注意：Supabase 每次最多回傳 1000 筆；若資料超過 1000 筆，自動分頁累積
-export async function fetchSakesTextOnly({ limit = 1000, offset = 0 } = {}) {
+export async function fetchSakesTextOnly({ limit = 100, offset = 0 } = {}) {
   if (hasSupabase) {
-    const PAGE = 1000; // Supabase 單次上限
-    let all = [];
-    let from = offset;
-    while (true) {
-      const { data, error } = await supabase
-        .from("sakes")
-        .select("id, info, added_at")
-        .order("added_at", { ascending: false })
-        .range(from, from + PAGE - 1);
-      if (error) { console.error(error); break; }
-      const page = data || [];
-      all = all.concat(page);
-      if (page.length < PAGE) break; // 最後一頁
-      from += PAGE;
-    }
-    return all.map(r => ({
+    const { data, error } = await supabase
+      .from("sakes")
+      .select("id, info, added_at")
+      .order("added_at", { ascending: false })
+      .range(offset, offset + limit - 1);
+    if (error) { console.error(error); return []; }
+    return (data || []).map(r => ({
       id: r.id,
       imageUrl: null,       // 先留空，背景補
       backImageUrl: null,
@@ -61,39 +51,46 @@ export async function fetchSakesTextOnly({ limit = 1000, offset = 0 } = {}) {
   try {
     const d = localStorage.getItem(LOCAL_KEY);
     const all = d ? JSON.parse(d) : [];
-    return all.map(s => ({ ...s, imageUrl: null }));
+    return all.slice(offset, offset + limit).map(s => ({ ...s, imageUrl: null }));
   } catch { return []; }
 }
 
 // 背景補圖：給一組 id，回傳 { id -> imageUrl } 對照表
-// id 數量可能超過 URL 長度限制，分批每次 200 筆
 export async function fetchImageUrls(ids) {
   if (!hasSupabase || !ids.length) return {};
-  const BATCH = 200;
+  const { data, error } = await supabase
+    .from("sakes")
+    .select("id, image_url, back_image_url")
+    .in("id", ids);
+  if (error) { console.error(error); return {}; }
   const map = {};
-  for (let i = 0; i < ids.length; i += BATCH) {
-    const chunk = ids.slice(i, i + BATCH);
-    const { data, error } = await supabase
-      .from("sakes")
-      .select("id, image_url, back_image_url")
-      .in("id", chunk);
-    if (error) { console.error(error); continue; }
-    for (const r of (data || [])) {
-      map[r.id] = { imageUrl: r.image_url, backImageUrl: r.back_image_url || null };
-    }
+  for (const r of (data || [])) {
+    map[r.id] = { imageUrl: r.image_url, backImageUrl: r.back_image_url || null };
   }
   return map;
 }
 
-// 備份用：一次撈全部
+// 備份用：撈全部。
+// 注意：Supabase 單次查詢預設最多回傳 1000 筆，所以必須分頁迴圈撈，
+// 否則資料超過 1000 筆時會被截斷（之前備份只匯出 1000 筆的原因）。
 export async function fetchAllSakes() {
   if (hasSupabase) {
-    const { data, error } = await supabase
-      .from("sakes")
-      .select("*")
-      .order("added_at", { ascending: false });
-    if (error) { console.error(error); return []; }
-    return (data || []).map(rowToSake);
+    const PAGE = 1000;
+    let all = [];
+    let from = 0;
+    while (true) {
+      const { data, error } = await supabase
+        .from("sakes")
+        .select("*")
+        .order("added_at", { ascending: false })
+        .range(from, from + PAGE - 1);
+      if (error) { console.error(error); break; }
+      const batch = data || [];
+      all = all.concat(batch);
+      if (batch.length < PAGE) break; // 最後一批不足 1000，代表撈完了
+      from += PAGE;
+    }
+    return all.map(rowToSake);
   }
   try {
     const d = localStorage.getItem(LOCAL_KEY);
@@ -222,12 +219,23 @@ export async function fetchAllSakesPublic(token) {
   if (!hasSupabase) return [];
   const valid = await verifyShareToken(token);
   if (!valid) return null;
-  const { data, error } = await supabase
-    .from("sakes")
-    .select("*")
-    .order("added_at", { ascending: false });
-  if (error) { console.error(error); return []; }
-  return (data || []).map(rowToSake);
+  // 同樣分頁撈，避免被 Supabase 1000 筆上限截斷
+  const PAGE = 1000;
+  let all = [];
+  let from = 0;
+  while (true) {
+    const { data, error } = await supabase
+      .from("sakes")
+      .select("*")
+      .order("added_at", { ascending: false })
+      .range(from, from + PAGE - 1);
+    if (error) { console.error(error); break; }
+    const batch = data || [];
+    all = all.concat(batch);
+    if (batch.length < PAGE) break;
+    from += PAGE;
+  }
+  return all.map(rowToSake);
 }
 
 function saveLocal(arr) {
